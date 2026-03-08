@@ -3,77 +3,93 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'network_manager.dart'; // To get the Ngrok SERVER_URL
+
+// GitHub Releases OTA — no server or ngrok needed!
+const String _githubOwner = 'ormix';         // CHANGE: your GitHub username
+const String _githubRepo  = 'bcgame';         // CHANGE: your GitHub repo name
 
 class UpdateManager {
   static final UpdateManager _instance = UpdateManager._internal();
   factory UpdateManager() => _instance;
   UpdateManager._internal();
 
-  /// Checks the server for a new APK version. If found, shows a non-dismissible dialog.
+  /// Checks GitHub Releases for a new APK version.
+  /// If found, shows a non-dismissible dialog.
   Future<void> checkForUpdates(BuildContext context) async {
     try {
-      // 1. Get current installed version
-      PackageInfo packageInfo = await PackageInfo.fromPlatform();
-      // packageInfo.buildNumber is usually a string like "1"
-      int currentBuildNumber = int.tryParse(packageInfo.buildNumber) ?? 1;
+      // 1. Get current installed build number
+      final packageInfo = await PackageInfo.fromPlatform();
+      final int currentBuild = int.tryParse(packageInfo.buildNumber) ?? 1;
 
-      // 2. Fetch latest version from Game Server
-      final String versionUrl = '${NetworkManager.serverUrl.replaceFirst("ws://", "http://").replaceFirst("wss://", "https://")}/api/version';
-      
-      final response = await http.get(Uri.parse(versionUrl)).timeout(const Duration(seconds: 5));
+      // 2. Fetch latest release from GitHub API (no auth needed for public repos)
+      final uri = Uri.parse(
+        'https://api.github.com/repos/$_githubOwner/$_githubRepo/releases/latest',
+      );
+      final response = await http.get(uri, headers: {
+        'Accept': 'application/vnd.github+json',
+        'X-GitHub-Api-Version': '2022-11-28',
+      }).timeout(const Duration(seconds: 10));
+
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        int serverVersion = data['version'] ?? 1;
-        String downloadUrl = data['url'] ?? '';
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        // 3. Compare and Show Dialog
-        if (serverVersion > currentBuildNumber) {
-          _showUpdateDialog(context, serverVersion, downloadUrl);
+        // tag_name is like "v13" — parse the integer
+        final tagName = data['tag_name'] as String? ?? 'v0';
+        final serverVersion = int.tryParse(tagName.replaceAll('v', '')) ?? 0;
+
+        // Find the APK asset download URL
+        final assets = (data['assets'] as List?)?.cast<Map<String, dynamic>>();
+        final apkAsset = assets?.firstWhere(
+          (a) => (a['name'] as String).endsWith('.apk'),
+          orElse: () => <String, dynamic>{},
+        );
+        final downloadUrl = apkAsset?['browser_download_url'] as String? ?? '';
+
+        debugPrint('[Update] Current: $currentBuild, Server: $serverVersion');
+        if (serverVersion > currentBuild && downloadUrl.isNotEmpty) {
+          if (context.mounted) {
+            _showUpdateDialog(context, serverVersion, downloadUrl);
+          }
         }
       }
     } catch (e) {
-      debugPrint("Update check failed: $e");
-      // Silently fail if server is down or no internet
+      debugPrint('[Update] Check failed (offline?): $e');
     }
   }
 
-  void _showUpdateDialog(BuildContext context, int serverVersion, String downloadUrl) {
+  void _showUpdateDialog(BuildContext context, int version, String downloadUrl) {
     showDialog(
       context: context,
-      barrierDismissible: false, // Must update
-      builder: (BuildContext dialogContext) {
-        return WillPopScope(
-          onWillPop: () async => false, // Prevent back button
-          child: AlertDialog(
-            title: const Row(
-              children: [
-                Icon(Icons.system_update, color: Colors.blue),
-                SizedBox(width: 8),
-                Text('Update Available!'),
-              ],
-            ),
-            content: Text(
-              'A new version (v$serverVersion) of Digital Ether is available. '
-              'Please download and install the latest APK to continue playing.'
-            ),
-            actions: [
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
-                onPressed: () async {
-                  final Uri url = Uri.parse(downloadUrl);
-                  if (await canLaunchUrl(url)) {
-                    await launchUrl(url, mode: LaunchMode.externalApplication);
-                  } else {
-                    debugPrint('Could not launch $url');
-                  }
-                },
-                child: const Text('Download APK', style: TextStyle(color: Colors.white)),
-              ),
+      barrierDismissible: false,
+      builder: (ctx) => WillPopScope(
+        onWillPop: () async => false,
+        child: AlertDialog(
+          title: const Row(
+            children: [
+              Icon(Icons.system_update, color: Colors.blue),
+              SizedBox(width: 8),
+              Text('Update Available!'),
             ],
           ),
-        );
-      },
+          content: Text(
+            'New version v$version of Digital Ether is available.\n'
+            'Please install it to continue playing.',
+          ),
+          actions: [
+            ElevatedButton.icon(
+              style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+              onPressed: () async {
+                final uri = Uri.parse(downloadUrl);
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+              icon: const Icon(Icons.download, color: Colors.white),
+              label: const Text('Download APK', style: TextStyle(color: Colors.white)),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

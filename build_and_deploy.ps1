@@ -1,71 +1,64 @@
 $ErrorActionPreference = "Stop"
 
+# === CONFIGURATION ===
+$githubOwner = "ormix"       # CHANGE: your GitHub username
+$githubRepo = "bcgame"      # CHANGE: your GitHub repo name
+
 $projectRoot = $PSScriptRoot
-$serverDir = Join-Path $projectRoot "game-server"
-$publicDir = Join-Path $serverDir "public"
-$versionFile = Join-Path $serverDir "version.json"
 $pubspecFile = Join-Path $projectRoot "pubspec.yaml"
 $apkPath = Join-Path $projectRoot "build\app\outputs\flutter-apk\app-release.apk"
-$destApkPath = Join-Path $publicDir "app-release.apk"
 
-Write-Host "Starting Automated OTA Build Process..." -ForegroundColor Cyan
+# Ensure gh is on PATH (installed via winget)
+$env:PATH += ";$env:ProgramFiles\GitHub CLI"
 
-# 1. Read current version from pubspec.yaml safely
-if (-Not (Test-Path $pubspecFile)) {
-    Write-Error "pubspec.yaml not found!"
-    exit 1
-}
+Write-Host "=== Digital Ether — GitHub Releases OTA Build ===" -ForegroundColor Cyan
+
+# --- Step 1: Read and increment build number from pubspec.yaml ---
+if (-Not (Test-Path $pubspecFile)) { Write-Error "pubspec.yaml not found!"; exit 1 }
 
 $lines = Get-Content $pubspecFile
 $newLines = @()
-$newBuildNumber = 0
+$newBuildNum = 0
 
 foreach ($line in $lines) {
     if ($line -match '^version:\s*(\d+\.\d+\.\d+)\+(\d+)') {
         $baseVersion = $matches[1]
-        $currentBuildNumber = [int]$matches[2]
-        $newBuildNumber = $currentBuildNumber + 1
-        
-        Write-Host "Incrementing Flutter build number: $currentBuildNumber -> $newBuildNumber" -ForegroundColor Yellow
-        $newLines += "version: $baseVersion+$newBuildNumber"
+        $newBuildNum = ([int]$matches[2]) + 1
+        Write-Host "Bumping build number -> $newBuildNum" -ForegroundColor Yellow
+        $newLines += "version: $baseVersion+$newBuildNum"
     }
     else {
         $newLines += $line
     }
 }
 
-if ($newBuildNumber -eq 0) {
-    Write-Error "Could not find 'version: x.y.z+n' string in pubspec.yaml"
-    exit 1
-}
-
+if ($newBuildNum -eq 0) { Write-Error "Could not parse version from pubspec.yaml"; exit 1 }
 Set-Content -Path $pubspecFile -Value $newLines -Encoding UTF8
 
-# 2. Build APK
-Write-Host "Compiling Flutter APK..." -ForegroundColor Cyan
-Invoke-Expression "flutter build apk"
-if ($LASTEXITCODE -ne 0) {
-    Write-Error "Flutter build failed"
-    exit $LASTEXITCODE
-}
+# --- Step 2: Build release APK ---
+Write-Host "Building Flutter APK..." -ForegroundColor Cyan
+flutter build apk --release
+if ($LASTEXITCODE -ne 0) { Write-Error "Flutter build failed"; exit 1 }
 
-# 3. Copy APK to Server
-Write-Host "Moving APK to Node.js server..." -ForegroundColor Cyan
-if (-Not (Test-Path $publicDir)) {
-    New-Item -ItemType Directory -Force -Path $publicDir | Out-Null
-}
+# --- Step 3: Stage and commit the version bump ---
+Write-Host "Committing version bump..." -ForegroundColor Cyan
+git add pubspec.yaml
+git commit -m "chore: bump version to $baseVersion+$newBuildNum"
+git push origin main
 
-if (Test-Path $destApkPath) {
-    Remove-Item $destApkPath -Force
-}
+# --- Step 4: Create GitHub Release and upload APK ---
+$tag = "v$newBuildNum"
+$title = "Digital Ether v$newBuildNum"
+$notes = "OTA release $tag — built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 
-Copy-Item -Path $apkPath -Destination $destApkPath -Force
+Write-Host "Publishing GitHub Release $tag..." -ForegroundColor Cyan
+gh release create $tag $apkPath `
+    --repo "$githubOwner/$githubRepo" `
+    --title $title `
+    --notes $notes
 
-# 4. Save new version.json on server
-$newVersionData = @{
-    version = $newBuildNumber
-}
-$newVersionData | ConvertTo-Json | Set-Content $versionFile
+if ($LASTEXITCODE -ne 0) { Write-Error "GitHub release failed"; exit 1 }
 
-Write-Host "OTA Update v$newBuildNumber deployed successfully!" -ForegroundColor Green
-Write-Host "The Node.js server will now serve this update to all clients." -ForegroundColor Green
+Write-Host ""
+Write-Host "=== SUCCESS: Release $tag published to GitHub! ===" -ForegroundColor Green
+Write-Host "APK URL: https://github.com/$githubOwner/$githubRepo/releases/tag/$tag" -ForegroundColor Green

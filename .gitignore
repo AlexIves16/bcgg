@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Node.js
+game-server/node_modules/
+
+# OTA APK stored locally (distributed via GitHub Releases)
+game-server/public/app-release.apk
