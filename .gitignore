@@ -49,3 +49,8 @@ game-server/node_modules/
 
 # OTA APK stored locally (distributed via GitHub Releases)
 game-server/public/app-release.apk
+
+# Firebase secrets — never commit these to a public repo!
+lib/firebase_options.dart
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
