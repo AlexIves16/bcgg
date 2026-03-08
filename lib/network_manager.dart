@@ -16,8 +16,8 @@ class NetworkManager {
   String? _username;
   String? _avatarBase64;
   
-  // Static Ngrok URL
-  String _serverUrl = "https://interequinoctial-sulcate-vanna.ngrok-free.dev"; 
+  // Permanent Railway.app game server URL (replaces ngrok)
+  String _serverUrl = "https://bcgg.up.railway.app";
   static String get serverUrl => _instance._serverUrl;
   
   // Stream to broadcast player updates to the UI
@@ -34,7 +34,7 @@ class NetworkManager {
 
   void connect() {
     _socket = IO.io(_serverUrl, <String, dynamic>{
-      'transports': ['websocket'],
+      'transports': ['polling', 'websocket'], // polling first for Railway proxy
       'autoConnect': false,
     });
 

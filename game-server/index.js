@@ -11,17 +11,18 @@ app.use(cors());
 // Раздача статики для APK-файлов (OTA обновления)
 app.use('/download', express.static(path.join(__dirname, 'public')));
 
-// Эндпоинт для проверки версии API
+// Health check root (Railway requires 200 on /)
+app.get('/', (req, res) => res.json({ status: 'ok', name: 'Digital Ether Game Server' }));
+
+// Version endpoint (now unused for OTA, kept for compatibility)
 app.get('/api/version', (req, res) => {
   try {
     const versionPath = path.join(__dirname, 'version.json');
     if (fs.existsSync(versionPath)) {
       const versionData = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
-      // Добавляем URL на скачивание базируясь на текущем хосте (ngrok url)
-      const downloadUrl = `https://${req.get('host')}/download/app-release.apk`;
-      res.json({ ...versionData, url: downloadUrl });
+      res.json(versionData);
     } else {
-      res.json({ version: 1, url: `https://${req.get('host')}/download/app-release.apk` });
+      res.json({ version: 1 });
     }
   } catch (error) {
     console.error("Error reading version.json:", error);
@@ -34,7 +35,12 @@ const io = new Server(server, {
   cors: {
     origin: '*',
     methods: ['GET', 'POST']
-  }
+  },
+  // Railway proxy compatibility: allow polling fallback
+  transports: ['polling', 'websocket'],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 // Хранилище игроков и монстров в оперативной памяти сервера

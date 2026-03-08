@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 # === CONFIGURATION ===
-$githubOwner = "AlexIves16"  # Your GitHub username
-$githubRepo = "bcgg"         # Your GitHub repo name
+$githubOwner = "AlexIves16"
+$githubRepo = "bcgg"
 
 $projectRoot = $PSScriptRoot
 $pubspecFile = Join-Path $projectRoot "pubspec.yaml"
@@ -11,9 +11,9 @@ $apkPath = Join-Path $projectRoot "build\app\outputs\flutter-apk\app-release.apk
 # Ensure gh is on PATH (installed via winget)
 $env:PATH += ";$env:ProgramFiles\GitHub CLI"
 
-Write-Host "=== Digital Ether — GitHub Releases OTA Build ===" -ForegroundColor Cyan
+Write-Host "=== Digital Ether - GitHub Releases OTA Build ===" -ForegroundColor Cyan
 
-# --- Step 1: Read and increment build number from pubspec.yaml ---
+# --- Step 1: Increment build number ---
 if (-Not (Test-Path $pubspecFile)) { Write-Error "pubspec.yaml not found!"; exit 1 }
 
 $lines = Get-Content $pubspecFile
@@ -40,25 +40,22 @@ Write-Host "Building Flutter APK..." -ForegroundColor Cyan
 flutter build apk --release
 if ($LASTEXITCODE -ne 0) { Write-Error "Flutter build failed"; exit 1 }
 
-# --- Step 3: Stage and commit the version bump ---
+# --- Step 3: Commit and push version bump ---
 Write-Host "Committing version bump..." -ForegroundColor Cyan
 git add pubspec.yaml
 git commit -m "chore: bump version to $baseVersion+$newBuildNum"
-git push origin main
+git push origin master
 
-# --- Step 4: Create GitHub Release and upload APK ---
+# --- Step 4: Publish GitHub Release ---
 $tag = "v$newBuildNum"
-$title = "Digital Ether v$newBuildNum"
-$notes = "OTA release $tag — built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+$releaseTitle = "Digital Ether $tag"
+$releaseNotes = "OTA release $tag built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 
 Write-Host "Publishing GitHub Release $tag..." -ForegroundColor Cyan
-gh release create $tag $apkPath `
-    --repo "$githubOwner/$githubRepo" `
-    --title $title `
-    --notes $notes
+gh release create "$tag" "$apkPath" --repo "$githubOwner/$githubRepo" --title "$releaseTitle" --notes "$releaseNotes" --latest
 
 if ($LASTEXITCODE -ne 0) { Write-Error "GitHub release failed"; exit 1 }
 
 Write-Host ""
-Write-Host "=== SUCCESS: Release $tag published to GitHub! ===" -ForegroundColor Green
-Write-Host "APK URL: https://github.com/$githubOwner/$githubRepo/releases/tag/$tag" -ForegroundColor Green
+Write-Host "=== SUCCESS: Release $tag published! ===" -ForegroundColor Green
+Write-Host "URL: https://github.com/$githubOwner/$githubRepo/releases/tag/$tag" -ForegroundColor Green
