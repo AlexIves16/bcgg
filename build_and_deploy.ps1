@@ -1,8 +1,8 @@
 $ErrorActionPreference = "Stop"
 
 # === CONFIGURATION ===
-$githubOwner = "ormix"       # CHANGE: your GitHub username
-$githubRepo = "bcgame"      # CHANGE: your GitHub repo name
+$githubOwner = "AlexIves16"  # Your GitHub username
+$githubRepo = "bcgg"         # Your GitHub repo name
 
 $projectRoot = $PSScriptRoot
 $pubspecFile = Join-Path $projectRoot "pubspec.yaml"

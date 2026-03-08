@@ -5,8 +5,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 // GitHub Releases OTA — no server or ngrok needed!
-const String _githubOwner = 'ormix';         // CHANGE: your GitHub username
-const String _githubRepo  = 'bcgame';         // CHANGE: your GitHub repo name
+const String _githubOwner = 'AlexIves16';  // Your GitHub username
+const String _githubRepo  = 'bcgg';         // Your GitHub repo name
 
 class UpdateManager {
   static final UpdateManager _instance = UpdateManager._internal();
