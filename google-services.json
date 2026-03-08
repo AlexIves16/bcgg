@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "9849806606",
+    "project_id": "game26-base",
+    "storage_bucket": "game26-base.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:9849806606:android:7373d55a29ac6f6b78c15f",
+        "android_client_info": {
+          "package_name": "com.example.bcgame"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "9849806606-f4ipfn8tjp75gs8h39ajnqaokvf7v4ak.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCqXj_JAFMBrwc5gmgkoqFVqJ7_-1R2z6Q"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "9849806606-f4ipfn8tjp75gs8h39ajnqaokvf7v4ak.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "9849806606-hrqr933i03mhlf4u3l11622o7t9506vp.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.bcgame"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
