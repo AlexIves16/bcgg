@@ -49,9 +49,8 @@ class LocationManager {
   Future<void> _updateUserLocation(Position position) async {
     try {
       NetworkManager().sendLocation(position.latitude, position.longitude);
-      print('Location sent to Game Server via WebSocket');
     } catch (e) {
-      print('Error sending location: $e');
+      // Slient error
     }
   }
 }

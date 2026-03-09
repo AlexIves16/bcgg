@@ -54,3 +54,7 @@ game-server/public/app-release.apk
 lib/firebase_options.dart
 android/app/google-services.json
 ios/Runner/GoogleService-Info.plist
+*.json
+!package.json
+!version.json
+!render.yaml

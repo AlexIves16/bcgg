@@ -1,0 +1,56 @@
+﻿Running Gradle task 'assembleRelease'...                        
+flutter : lib/map_screen.dart:121:30: Error: The getter 'position' 
+isn't defined for the type '_MapScreenState'.
+строка:1 знак:1
++ flutter build apk --release --no-pub --no-android-gradle-daemon > 
+bui ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~
+    + CategoryInfo          : NotSpecified: (lib/map_screen....apSc 
+   reenState'.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+ - '_MapScreenState' is from 'package:bcgame/map_screen.dart' 
+('lib/map_screen.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'position'.
+          _currentPosition = position;
+                             ^^^^^^^^
+lib/map_screen.dart:124:37: Error: The getter 'position' isn't 
+defined for the type '_MapScreenState'.
+ - '_MapScreenState' is from 'package:bcgame/map_screen.dart' 
+('lib/map_screen.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'position'.
+      NetworkManager().sendLocation(position.latitude, 
+position.longitude);
+                                    ^^^^^^^^
+lib/map_screen.dart:124:56: Error: The getter 'position' isn't 
+defined for the type '_MapScreenState'.
+ - '_MapScreenState' is from 'package:bcgame/map_screen.dart' 
+('lib/map_screen.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'position'.
+      NetworkManager().sendLocation(position.latitude, 
+position.longitude);
+                                                       ^^^^^^^^
+Target kernel_snapshot_program failed: Exception
+
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:compileFlutterBuildRelease'.
+> Process 'command 
+'C:\Users\ormix\develop\flutter\bin\flutter.bat'' finished with 
+non-zero exit value 1
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 56s
+Running Gradle task 'assembleRelease'...                           56.6s
+Gradle task assembleRelease failed with exit code 1

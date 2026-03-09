@@ -116,50 +116,37 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           ),
         );
       }
-    }
-
     try {
-      debugPrint("3. Starting BLE, and Network...");
-      NetworkManager().connect();
-      BleManager().startScanning();
-    } catch (e) {
-      debugPrint("!!! Sensors/BLE/Network Error: $e");
-    }
-
-    try {
-      debugPrint("4. Getting current position (15s timeout max)...");
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
         timeLimit: const Duration(seconds: 15),
       );
-      debugPrint("5. Position got successfully: ${position.latitude}, ${position.longitude}");
       if (mounted) {
         setState(() {
           _currentPosition = position;
         });
       }
-      // CRITICAL: Send initial position to server so it knows where to spawn monsters!
-      // Otherwise, the server will wait until the player walks 10 meters to trigger startTracking.
       NetworkManager().sendLocation(position.latitude, position.longitude);
     } catch (e) {
       debugPrint("!!! Error getting initial position: $e");
-      // Fallback location so the map can still load
+      // Fallback location - Moscow
+      final fallbackPos = Position(
+        longitude: 37.6173,
+        latitude: 55.7558,
+        timestamp: DateTime.now(),
+        accuracy: 0.0,
+        altitude: 0.0,
+        altitudeAccuracy: 0.0,
+        heading: 0.0,
+        headingAccuracy: 0.0,
+        speed: 0.0,
+        speedAccuracy: 0.0,
+      );
       if (mounted) {
         setState(() {
-          _currentPosition = Position(
-            longitude: 0.0,
-            latitude: 0.0,
-            timestamp: DateTime.now(),
-            accuracy: 0.0,
-            altitude: 0.0,
-            altitudeAccuracy: 0.0,
-            heading: 0.0,
-            headingAccuracy: 0.0,
-            speed: 0.0,
-            speedAccuracy: 0.0,
-          );
+          _currentPosition = fallbackPos;
         });
-        debugPrint("6. Fallback position set to 0.0, 0.0");
+        NetworkManager().sendLocation(fallbackPos.latitude, fallbackPos.longitude);
       }
     }
 
@@ -278,6 +265,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   void _startListeningToMonsters() {
     _monstersSubscription = NetworkManager().monstersStream.listen((List<dynamic> elementsData) {
       if (!mounted) return;
+      debugPrint('[MAP] Received ${elementsData.length} elements for rendering');
       final now = DateTime.now();
       final incomingIds = <String>{};
 
@@ -286,16 +274,24 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         final id = element['id']?.toString();
         if (id == null) continue;
         incomingIds.add(id);
-        final newPos = LatLng(element['lat'], element['lng']);
+        
+        // Use more robust parsing for coordinates
+        final double? lat = (element['lat'] as num?)?.toDouble();
+        final double? lng = (element['lng'] as num?)?.toDouble();
+        
+        if (lat == null || lng == null) {
+          debugPrint('[MAP] Element $id has invalid coords: lat=$lat, lng=$lng');
+          continue;
+        }
+
+        final newPos = LatLng(lat, lng);
         
         if (!_entityDataById.containsKey(id)) {
-          // New entity: start at exact position (no animation needed)
           _entityFromPos[id] = newPos;
           _entityToPos[id] = newPos;
           _entityCurrentPos[id] = newPos;
           _entityAnimStart[id] = now;
         } else {
-          // Existing entity: animate from current animated pos to new target
           _entityFromPos[id] = _entityCurrentPos[id] ?? newPos;
           _entityToPos[id] = newPos;
           _entityAnimStart[id] = now;
@@ -312,6 +308,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         _entityCurrentPos.remove(id);
         _entityAnimStart.remove(id);
       }
+      
+      // Explicitly trigger a rebuild when new data arrives
+      setState(() {});
     });
   }
 
@@ -457,6 +456,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   ),
                 ],
               )
+            ),
+          ),
+          // Version Display Overlay
+          Positioned(
+            bottom: 80,
+            right: 16,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.black54,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(
+                'v${NetworkManager().appVersion}',
+                style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+              ),
             ),
           ),
         ],

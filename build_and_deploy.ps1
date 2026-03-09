@@ -60,6 +60,7 @@ Write-Host "Committing version bump..." -ForegroundColor Cyan
 git add pubspec.yaml
 git commit -m "chore: bump version to $baseVersion+$newBuildNum ($Environment)"
 $branch = if ($Environment -eq "Nightly") { "develop" } else { "master" }
+git pull --rebase origin $branch
 git push origin $branch
 
 # --- Step 4: Publish GitHub Release ---

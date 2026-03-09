@@ -4,187 +4,202 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
+const admin = require('firebase-admin');
 
 const app = express();
 app.use(cors());
 
+// Initialize Firebase Admin
+const serviceAccount = require("./firebase-service-account.json");
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: "https://game26-base-default-rtdb.europe-west1.firebasedatabase.app/"
+});
+
+const db = admin.database();
+
 // Раздача статики для APK-файлов (OTA обновления)
 app.use('/download', express.static(path.join(__dirname, 'public')));
 
-// Health check root (Railway requires 200 on /)
-app.get('/', (req, res) => res.json({ status: 'ok', name: 'Digital Ether Game Server' }));
-
-// Version endpoint (now unused for OTA, kept for compatibility)
-app.get('/api/version', (req, res) => {
-  try {
-    const versionPath = path.join(__dirname, 'version.json');
-    if (fs.existsSync(versionPath)) {
-      const versionData = JSON.parse(fs.readFileSync(versionPath, 'utf8'));
-      res.json(versionData);
-    } else {
-      res.json({ version: 1 });
-    }
-  } catch (error) {
-    console.error("Error reading version.json:", error);
-    res.status(500).json({ error: "Could not read version" });
-  }
-});
+// Health check root
+app.get('/', (req, res) => res.json({ status: 'ok', name: 'Digital Ether Game Server (RTDB Sync Active)' }));
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
-  },
-  // Railway proxy compatibility: allow polling fallback
-  transports: ['polling', 'websocket'],
-  allowEIO3: true,
-  pingTimeout: 60000,
-  pingInterval: 25000
+  cors: { origin: '*', methods: ['GET', 'POST'] },
+  transports: ['polling', 'websocket']
 });
 
-// Хранилище игроков и монстров в оперативной памяти сервера
-const players = {};
+// Хранилище монстров и облаков
 let monsters = [];
 let clouds = [];
-let monsterIdCounter = 1;
-let cloudIdCounter = 1;
+let monsterIdCounter = Date.now();
+let cloudIdCounter = Date.now();
 
-// Настройки генерации
-const MAX_MONSTERS = 10;
-const MAX_CLOUDS = 5;
-const SPAWN_RADIUS = 0.002; // Радиус спавна около игрока в градусах (~200 метров)
+const MAX_MONSTERS = 20;
+const MAX_CLOUDS = 10;
+const SPAWN_RADIUS = 0.001;
+const DESPAWN_DISTANCE = 2000; // Despawn if > 2km from any player
 
-// Простой генератор случайных чисел в заданном диапазоне
 function randomOffset(radius) {
   return (Math.random() - 0.5) * radius * 2;
 }
 
+// Distance helper
+function getDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+// Sync entities to Firebase RTDB
+async function syncToFirebase() {
+  try {
+    const monstersObj = {};
+    monsters.forEach(m => monstersObj[m.id] = m);
+
+    const cloudsObj = {};
+    clouds.forEach(c => cloudsObj[c.id] = c);
+
+    await db.ref('map').set({
+      monsters: monstersObj,
+      clouds: cloudsObj,
+      lastUpdate: Date.now()
+    });
+  } catch (err) {
+    console.error('[FIREBASE] Sync error:', err);
+  }
+}
+
+// Clear old map entities on start to prevent "Moscow monsters" blocking spawns
+db.ref('map').remove();
+
 // Игровой цикл на сервере (запускается каждые 5 секунд)
-setInterval(() => {
-  const activePlayers = Object.values(players);
-  if (activePlayers.length === 0) return; // Если никого нет, ничего не делаем
+setInterval(async () => {
+  // Try to get active players from RTDB to spawn things near them
+  let activePlayers = [];
+  try {
+    const snapshot = await db.ref('players').once('value');
+    if (snapshot.exists()) {
+      activePlayers = Object.values(snapshot.val());
+    }
+  } catch (err) {
+    console.error('[FIREBASE] Error fetching players:', err);
+  }
 
-  // 1. Спавн монстров (если их меньше максимума)
+  if (activePlayers.length === 0) {
+    console.log('[GAME] Waiting for players to join...');
+    return; // Don't spawn fallback entities
+  }
+
+  // 0. Despawn far entities
+  monsters = monsters.filter(monster => {
+    return activePlayers.some(p => getDistance(monster.lat, monster.lng, p.lat, p.lng) < DESPAWN_DISTANCE);
+  });
+
+  clouds = clouds.filter(cloud => {
+    return activePlayers.some(p => getDistance(cloud.lat, cloud.lng, p.lat, p.lng) < DESPAWN_DISTANCE);
+  });
+
+  // 1. Спавн монстров
   if (monsters.length < MAX_MONSTERS) {
-    // Выбираем случайного игрока для спавна монстра
-    const targetPlayer = activePlayers[Math.floor(Math.random() * activePlayers.length)];
+    const target = activePlayers[Math.floor(Math.random() * activePlayers.length)];
 
-    // Выдаем монстру случайную фигуру для победы над ним
     const shapes = ['circle', 'square', 'triangle'];
     const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
-    const energyCost = Math.floor(Math.random() * 3) * 10 + 10; // 10, 20, or 30
+    const energyCost = Math.floor(Math.random() * 3) * 10 + 10;
 
-    // Создаем монстра чуть в стороне от игрока
     const newMonster = {
       id: `monster_${monsterIdCounter++}`,
       type: 'wild_bug',
       hp: 100,
       requiredShape: randomShape,
       energyCost: energyCost,
-      timeLimit: 15, // 15 секунд на рисование
-      lat: targetPlayer.lat + randomOffset(SPAWN_RADIUS),
-      lng: targetPlayer.lng + randomOffset(SPAWN_RADIUS)
+      timeLimit: 15,
+      lat: target.lat + randomOffset(SPAWN_RADIUS),
+      lng: target.lng + randomOffset(SPAWN_RADIUS)
     };
     monsters.push(newMonster);
-    console.log(`[GAME ENGINE] Spawned ${randomShape} monster ${newMonster.id} (Cost: ${energyCost}) near ${targetPlayer.email || targetPlayer.uid}`);
   }
 
-  // Спавн облаков энергии
+  // 2. Спавн облаков
   if (clouds.length < MAX_CLOUDS) {
-    const targetPlayer = activePlayers[Math.floor(Math.random() * activePlayers.length)];
-    const capacity = Math.floor(Math.random() * 120) + 30; // 30 to 149
+    const target = activePlayers[Math.floor(Math.random() * activePlayers.length)];
 
     const newCloud = {
       id: `cloud_${cloudIdCounter++}`,
       type: 'energy_cloud',
-      capacity: capacity,
-      lat: targetPlayer.lat + randomOffset(SPAWN_RADIUS),
-      lng: targetPlayer.lng + randomOffset(SPAWN_RADIUS)
+      capacity: Math.floor(Math.random() * 120) + 30,
+      lat: target.lat + randomOffset(SPAWN_RADIUS),
+      lng: target.lng + randomOffset(SPAWN_RADIUS)
     };
     clouds.push(newCloud);
-    console.log(`[GAME ENGINE] Spawned energy cloud ${newCloud.id} (Cap: ${capacity}) near ${targetPlayer.email || targetPlayer.uid}`);
   }
 
-  // Блуждание существующих монстров (ИИ двигает их на крошечные шаги)
+  // 3. AI Movement
   monsters.forEach(monster => {
-    monster.lat += randomOffset(0.00002); // маленькие шаги ~2м
-    monster.lng += randomOffset(0.00002);
+    monster.lat += randomOffset(0.00003);
+    monster.lng += randomOffset(0.00003);
   });
 
-  // Облака тоже могут медленно дрейфовать
   clouds.forEach(cloud => {
-    cloud.lat += randomOffset(0.00001); // очень медленный дрейф ~1м
+    cloud.lat += randomOffset(0.00001);
     cloud.lng += randomOffset(0.00001);
   });
 
-  // 3. Рассылка обновленной карты всем игрокам
+  // 4. Sync to DB
+  await syncToFirebase();
+
+  // Also keep Socket.IO for debugging
   io.emit('mapElementsUpdate', [...monsters, ...clouds]);
 
-}, 5000); // 5 секундный тик сервера
+}, 5000);
+
+// Listen for action requests via RTDB (fallback for sockets)
+db.ref('actions').on('child_added', async (snapshot) => {
+  const action = snapshot.val();
+  if (!action) return;
+
+  console.log(`[ACTION] Received ${action.type} from ${action.uid}`);
+
+  if (action.type === 'killMonster') {
+    monsters = monsters.filter(m => m.id !== action.monsterId);
+    await syncToFirebase();
+  } else if (action.type === 'mineEnergy') {
+    const idx = clouds.findIndex(c => c.id === action.cloudId);
+    if (idx !== -1) {
+      clouds[idx].capacity -= action.amount;
+      if (clouds[idx].capacity <= 0) clouds.splice(idx, 1);
+      await syncToFirebase();
+    }
+  }
+
+  // Delete action after processing
+  await snapshot.ref.remove();
+});
+
+// Listen for player updates in RTDB
+db.ref('players').on('child_added', (snapshot) => {
+  const p = snapshot.val();
+  console.log(`[PLAYER] Joined: ${p.email} (${p.uid})`);
+});
+
+db.ref('players').on('child_changed', (snapshot) => {
+  const p = snapshot.val();
+  console.log(`[PLAYER] Updated: ${p.email} at ${p.lat}, ${p.lng}`);
+});
+
+db.ref('players').on('child_removed', (snapshot) => {
+  console.log(`[PLAYER] Left: ${snapshot.key}`);
+});
 
 io.on('connection', (socket) => {
-  console.log(`Player connected: ${socket.id}`);
-
-  // Когда игрок подключается, мы пока не знаем его координат.
-  // Просто добавляем его в объект, когда он пришлет первую позицию.
-
-  socket.on('updateLocation', (data) => {
-    // data.lat, data.lng, data.uid, data.email, data.username, data.avatarBase64
-    players[socket.id] = {
-      id: socket.id,
-      uid: data.uid || socket.id,
-      email: data.email,
-      username: data.username,
-      avatarBase64: data.avatarBase64,
-      lat: data.lat,
-      lng: data.lng,
-      lastUpdated: Date.now()
-    };
-
-    // Рассылаем обновленный список всех игроков всем подключенным клиентам
-    io.emit('playersUpdate', Object.values(players));
-    // Сразу посылаем список элементов при обновлении локации, чтобы вновь зашедший их увидел
-    socket.emit('mapElementsUpdate', [...monsters, ...clouds]);
-  });
-
-  socket.on('logActivity', (data) => {
-    // data.uid, data.email, data.action, data.value
-    const timestamp = new Date().toLocaleTimeString();
-    const identifier = data.email || data.uid || socket.id;
-    console.log(`[ACTIVITY ${timestamp}] Player ${identifier} performed '${data.action}': +${data.value} XP`);
-  });
-
-  // Событие добычи энергии
-  socket.on('mineEnergy', (data) => {
-    // data.cloudId, data.amount
-    const cloudIndex = clouds.findIndex(c => c.id === data.cloudId);
-    if (cloudIndex !== -1) {
-      clouds[cloudIndex].capacity -= data.amount;
-      if (clouds[cloudIndex].capacity <= 0) {
-        console.log(`[GAME ENGINE] Player ${socket.id} depleted cloud ${data.cloudId}!`);
-        clouds.splice(cloudIndex, 1);
-      }
-      io.emit('mapElementsUpdate', [...monsters, ...clouds]);
-    }
-  });
-
-  // Событие уничтожения монстра игроком
-  socket.on('killMonster', (data) => {
-    const startCount = monsters.length;
-    monsters = monsters.filter(m => m.id !== data.monsterId);
-    if (monsters.length < startCount) {
-      console.log(`[GAME ENGINE] Player ${socket.id} killed monster ${data.monsterId}!`);
-      io.emit('mapElementsUpdate', [...monsters, ...clouds]);
-    }
-  });
-
-  socket.on('disconnect', () => {
-    console.log(`Player disconnected: ${socket.id}`);
-    delete players[socket.id];
-    // Обновляем список для оставшихся
-    io.emit('playersUpdate', Object.values(players));
-  });
+  console.log(`Socket Debug Connection: ${socket.id}`);
 });
 
 const PORT = process.env.PORT || 3000;
