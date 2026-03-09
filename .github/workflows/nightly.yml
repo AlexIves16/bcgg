@@ -1,0 +1,46 @@
+name: Nightly Build
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.x'
+          channel: 'stable'
+          
+      - name: Install dependencies
+        run: flutter pub get
+        
+      - name: Build APK (Nightly)
+        run: flutter build apk --release --dart-define=SERVER_URL=https://bcgg-nightly.up.railway.app
+        
+      - name: Get Build Number
+        id: build_number
+        run: echo "BUILD_NUMBER=$(grep 'version:' pubspec.yaml | cut -d '+' -f 2)" >> $GITHUB_OUTPUT
+
+      - name: Create Nightly Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/app/outputs/flutter-apk/app-release.apk
+          tag_name: v${{ steps.build_number.outputs.BUILD_NUMBER }}-nightly
+          name: Nightly Build v${{ steps.build_number.outputs.BUILD_NUMBER }}
+          body: "Automated nightly build for testing. Branch: develop"
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

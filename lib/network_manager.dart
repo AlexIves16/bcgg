@@ -16,8 +16,11 @@ class NetworkManager {
   String? _username;
   String? _avatarBase64;
   
-  // Permanent Railway.app game server URL (replaces ngrok)
-  String _serverUrl = "https://bcgg.up.railway.app";
+  // Dynamic Railway.app game server URL (supports production and nightly)
+  String _serverUrl = const String.fromEnvironment(
+    'SERVER_URL',
+    defaultValue: "https://bcgg-production.up.railway.app",
+  );
   static String get serverUrl => _instance._serverUrl;
   
   // Stream to broadcast player updates to the UI
