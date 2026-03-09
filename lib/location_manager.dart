@@ -35,7 +35,7 @@ class LocationManager {
 
   void startTracking() {
     _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 1),
+      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 20),
     ).listen((Position position) {
       _positionController.add(position); // Broadcast to UI
       _updateUserLocation(position);
