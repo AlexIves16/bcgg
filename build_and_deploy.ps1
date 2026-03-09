@@ -68,7 +68,8 @@ $releaseTitle = "Digital Ether $tag"
 $releaseNotes = "$Environment release $tag built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 
 Write-Host "Publishing GitHub Release $tag..." -ForegroundColor Cyan
-gh release create "$tag" "$apkPath" --repo "$githubOwner/$githubRepo" --title "$releaseTitle" --notes "$releaseNotes" --latest=$($Environment -eq "Production" -? "true" : "false")
+$isLatest = if ($Environment -eq "Production") { "true" } else { "false" }
+gh release create "$tag" "$apkPath" --repo "$githubOwner/$githubRepo" --title "$releaseTitle" --notes "$releaseNotes" --latest=$isLatest
 
 if ($LASTEXITCODE -ne 0) { Write-Error "GitHub release failed"; exit 1 }
 
