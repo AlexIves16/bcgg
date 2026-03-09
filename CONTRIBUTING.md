@@ -2,10 +2,13 @@
 
 Welcome! This guide explains how to contribute to the project and how our deployment workflow works.
 
-## Branching Strategy
+## Branching Rules
 
-- **`master`**: Production environment. Only stable, tested code goes here.
-- **`develop`**: Nightly/Staging environment. All new features and bug fixes should be merged here first.
+> [!IMPORTANT]
+> **DEVELOP BRANCH ONLY**: For this account, all work must be done on the `develop` branch. Never push directly to `master`.
+
+- **develop**: Target branch for all features and bug fixes. Pushing here updates the **Nightly Build**.
+- **master**: Production branch. Only for stable releases.
 
 ## Workflow
 
