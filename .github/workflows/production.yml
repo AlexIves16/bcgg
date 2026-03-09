@@ -26,6 +26,12 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
         
+      - name: Inject Firebase Secrets
+        run: |
+          echo "${{ secrets.FIREBASE_OPTIONS_BASE64 }}" | base64 -d > lib/firebase_options.dart
+          mkdir -p android/app
+          echo "${{ secrets.GOOGLE_SERVICES_BASE64 }}" | base64 -d > android/app/google-services.json
+
       - name: Build APK (Production)
         run: flutter build apk --release --dart-define=SERVER_URL=https://bcgg-production.up.railway.app
         
