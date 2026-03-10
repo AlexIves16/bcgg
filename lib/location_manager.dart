@@ -36,6 +36,12 @@ class LocationManager {
     }
   }
 
+  Future<Position> getCurrentPosition() async {
+    return await Geolocator.getCurrentPosition(
+      desiredAccuracy: LocationAccuracy.high,
+    );
+  }
+
   void startTracking() {
     _positionSubscription = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(

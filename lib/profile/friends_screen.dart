@@ -7,6 +7,7 @@ import '../network_manager.dart';
 import '../location_manager.dart';
 import 'add_friend_dialog.dart';
 import 'chat_screen.dart';
+import '../network/webrtc_manager.dart';
 
 class FriendsScreen extends StatefulWidget {
   const FriendsScreen({super.key});

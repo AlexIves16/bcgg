@@ -215,31 +215,62 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _inviteMoreFriends() {
-    // Show a dialog to pick a friend to invite to this specific groupId
+    final myUid = WebRtcManager().auth.currentUser?.uid;
+    if (myUid == null) return;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF1a1a2e),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (context) => Container(
         padding: const EdgeInsets.all(16),
+        height: 400,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           children: [
-            const Text('Invite Friends to P2P Session', style: TextStyle(color: Colors.white, fontSize: 18)),
-            const Divider(color: Colors.white24),
-            // We can reuse a list of online friends or just a simple input
-            const Text('Feature coming soon: Picker list', style: TextStyle(color: Colors.white60)),
-            const SizedBox(height: 16),
-            TextField(
-              decoration: const InputDecoration(
-                hintText: 'Friend Email',
-                hintStyle: TextStyle(color: Colors.white30),
+            const Text('Invite Friends to Session', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('They will receive a notification to join this P2P channel.', style: TextStyle(color: Colors.white60, fontSize: 12)),
+            const Divider(color: Colors.white24, height: 24),
+            Expanded(
+              child: StreamBuilder<QuerySnapshot>(
+                stream: FirebaseFirestore.instance
+                    .collection('users')
+                    .doc(myUid)
+                    .collection('friends')
+                    .where('status', isEqualTo: 'friends')
+                    .snapshots(),
+                builder: (context, snapshot) {
+                  if (snapshot.connectionState == ConnectionState.waiting) return const Center(child: CircularProgressIndicator());
+                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+                    return const Center(child: Text('No friends found to invite.', style: TextStyle(color: Colors.grey)));
+                  }
+
+                  final friendDocs = snapshot.data!.docs;
+                  return ListView.builder(
+                    itemCount: friendDocs.length,
+                    itemBuilder: (context, index) {
+                      final friendData = friendDocs[index].data() as Map<String, dynamic>;
+                      final friendUid = friendDocs[index].id;
+                      final email = friendData['email'] ?? 'Unknown';
+
+                      return ListTile(
+                        leading: const CircleAvatar(child: Icon(Icons.person)),
+                        title: Text(email, style: const TextStyle(color: Colors.white)),
+                        trailing: ElevatedButton(
+                          onPressed: () {
+                            WebRtcManager().sendInvite(friendUid, widget.groupId, widget.groupName);
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(this.context).showSnackBar(
+                              SnackBar(content: Text('Invitation sent to $email'), backgroundColor: Colors.green),
+                            );
+                          },
+                          child: const Text('Invite'),
+                        ),
+                      );
+                    },
+                  );
+                },
               ),
-              style: const TextStyle(color: Colors.white),
-              onSubmitted: (email) {
-                // In a real app, we'd lookup the UID. For now, we assume simple email or UID input
-                Navigator.pop(context);
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Inviting...')));
-              },
             ),
           ],
         ),

@@ -64,7 +64,17 @@ class WebRtcManager {
     'iceServers': [
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
-    ]
+      {'urls': 'stun:stun2.l.google.com:19302'},
+      {'urls': 'stun:stun3.l.google.com:19302'},
+      {'urls': 'stun:stun4.l.google.com:19302'},
+      // TODO: Добавьте свои TURN серверы здесь для 100% стабильности (например, от Metered.ca)
+      // {
+      //   'urls': 'turn:your-turn-server.com:3478',
+      //   'username': 'your-username',
+      //   'credential': 'your-password'
+      // },
+    ],
+    'iceTransportPolicy': 'all', // Гарантирует использование и STUN и TURN
   };
 
   final Map<String, dynamic> _dcConstraints = {
@@ -181,7 +191,12 @@ class WebRtcManager {
     _peerConnections[peerUid] = pc;
 
     pc.onIceCandidate = (candidate) {
+      debugPrint('[WebRTC] Local ICE Candidate gathered: ${candidate.candidate?.split(" ")[0]}');
       _sendSignaling(peerUid, {'ice': candidate.toMap()});
+    };
+
+    pc.onIceConnectionState = (state) {
+      debugPrint('[WebRTC] ICE Connection state to $peerUid: $state');
     };
 
     pc.onConnectionState = (state) {
@@ -242,8 +257,8 @@ class WebRtcManager {
       final answerMap = Map<String, dynamic>.from(data['answer']);
       await pc.setRemoteDescription(RTCSessionDescription(answerMap['sdp'], answerMap['type']));
     } else if (data.containsKey('ice')) {
-      debugPrint('[WebRTC] Received ICE CANDIDATE from $peerUid');
       final iceMap = Map<String, dynamic>.from(data['ice']);
+      debugPrint('[WebRTC] Received ICE CANDIDATE from $peerUid: ${iceMap['candidate']?.split(" ")[0]}');
       await pc.addCandidate(RTCIceCandidate(iceMap['candidate'], iceMap['sdpMid'], iceMap['sdpMLineIndex']));
     }
   }

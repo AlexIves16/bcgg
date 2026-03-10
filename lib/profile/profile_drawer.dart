@@ -55,45 +55,54 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
     final String? photoUrl = user?.photoURL;
 
     return Drawer(
-      child: Column(
-        children: [
-          StreamBuilder<DocumentSnapshot>(
-            stream: user != null
-                ? FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots()
-                : const Stream.empty(),
-            builder: (context, snapshot) {
-              String displayEmail = email;
-              String displayName = 'Level ${(_userXp / 100).floor() + 1}';
-              Widget? avatar;
+      child: StreamBuilder<DocumentSnapshot>(
+        stream: user != null
+            ? FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots()
+            : const Stream.empty(),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            debugPrint("[PROFILE] Firestore stream error: ${snapshot.error}");
+          }
+          
+          final data = (snapshot.hasData && snapshot.data!.exists)
+              ? snapshot.data!.data() as Map<String, dynamic>
+              : <String, dynamic>{};
 
-              if (snapshot.hasData && snapshot.data!.exists) {
-                final data = snapshot.data!.data() as Map<String, dynamic>;
-                if (data['username'] != null && data['username'].toString().isNotEmpty) {
-                  displayName = '${data['username']} (Lv ${(_userXp / 100).floor() + 1})';
-                }
-                
-                if (data['avatarBase64'] != null) {
-                  avatar = CircleAvatar(
-                    backgroundColor: Colors.white,
-                    backgroundImage: MemoryImage(base64Decode(data['avatarBase64'])),
-                  );
-                } else if (data['username'] != null && data['username'].toString().isNotEmpty) {
-                  final seed = Uri.encodeComponent(data['username']);
-                  avatar = CircleAvatar(
-                    backgroundColor: Colors.grey[200],
-                    backgroundImage: NetworkImage('https://api.dicebear.com/8.x/pixel-art/png?seed=$seed'),
-                  );
-                }
-              }
+          final bool isAdmin = data['isAdmin'] == true;
+          if (snapshot.hasData) {
+             debugPrint("[PROFILE] data loaded, isAdmin: $isAdmin");
+          }
+          
+          String displayEmail = email;
+          String displayName = 'Level ${(_userXp / 100).floor() + 1}';
+          Widget? avatar;
 
-              // Fallback avatar
-              avatar ??= CircleAvatar(
-                backgroundColor: Colors.white,
-                backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
-                child: photoUrl == null ? const Icon(Icons.person, size: 40, color: Colors.grey) : null,
-              );
+          if (data['username'] != null && data['username'].toString().isNotEmpty) {
+            displayName = '${data['username']} (Lv ${(_userXp / 100).floor() + 1})';
+          }
+          
+          if (data['avatarBase64'] != null) {
+            avatar = CircleAvatar(
+              backgroundColor: Colors.white,
+              backgroundImage: MemoryImage(base64Decode(data['avatarBase64'])),
+            );
+          } else if (data['username'] != null && data['username'].toString().isNotEmpty) {
+            final seed = Uri.encodeComponent(data['username']);
+            avatar = CircleAvatar(
+              backgroundColor: Colors.grey[200],
+              backgroundImage: NetworkImage('https://api.dicebear.com/8.x/pixel-art/png?seed=$seed'),
+            );
+          }
 
-              return UserAccountsDrawerHeader(
+          avatar ??= CircleAvatar(
+            backgroundColor: Colors.white,
+            backgroundImage: photoUrl != null ? NetworkImage(photoUrl) : null,
+            child: photoUrl == null ? const Icon(Icons.person, size: 40, color: Colors.grey) : null,
+          );
+
+          return Column(
+            children: [
+              UserAccountsDrawerHeader(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
                     colors: [Colors.blueAccent, Colors.purpleAccent],
@@ -116,79 +125,67 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
                 ),
                 accountName: Text(displayName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
                 accountEmail: Text(displayEmail),
-              );
-            },
-          ),
-          
-          // Stats Row
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildStatColumn('Energy', '$_userEnergy', Colors.orange, Icons.flash_on),
-                _buildStatColumn('XP', '$_userXp', Colors.blue, Icons.star),
-              ],
-            ),
-          ),
-          const Divider(),
+              ),
+              
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildStatColumn('Energy', '$_userEnergy', Colors.orange, Icons.flash_on),
+                    _buildStatColumn('XP', '$_userXp', Colors.blue, Icons.star),
+                  ],
+                ),
+              ),
+              const Divider(),
 
-          // Navigation Links
-          ListTile(
-            leading: const Icon(Icons.people),
-            title: const Text('Friends'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.pop(context); // Close Drawer
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const FriendsScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.mic),
-            title: const Text('Voice Calibration'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () {
-              Navigator.pop(context); // Close Drawer
-              Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const VoiceCalibrationScreen()),
-              );
-            },
-          ),
-          ListTile(
-            leading: const Icon(Icons.military_tech),
-            title: const Text('Achievements (Coming Soon)'),
-            enabled: false,
-            onTap: () {},
-          ),
-          
-          if (user?.email == 'almalexyz@gmail.com')
-            ListTile(
-              leading: const Icon(Icons.admin_panel_settings, color: Colors.orangeAccent),
-              title: const Text('Admin Panel', style: TextStyle(color: Colors.orangeAccent)),
-              onTap: () {
-                Navigator.pop(context); // Close Drawer
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (context) => const AdminScreen()),
-                );
-              },
-            ),
-          
-          const Spacer(),
-          const Divider(),
-          
-          // Logout
-          ListTile(
-            leading: const Icon(Icons.exit_to_app, color: Colors.redAccent),
-            title: const Text('Logout', style: TextStyle(color: Colors.redAccent)),
-            onTap: () => _logout(context),
-          ),
-          const SizedBox(height: 20),
-        ],
+              ListTile(
+                leading: const Icon(Icons.people),
+                title: const Text('Friends'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const FriendsScreen()));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.mic),
+                title: const Text('Voice Calibration'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const VoiceCalibrationScreen()));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.military_tech),
+                title: const Text('Achievements (Coming Soon)'),
+                enabled: false,
+                onTap: () {},
+              ),
+              
+              if (isAdmin)
+                ListTile(
+                  leading: const Icon(Icons.admin_panel_settings, color: Colors.orangeAccent),
+                  title: const Text('Admin Panel', style: TextStyle(color: Colors.orangeAccent)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminScreen()));
+                  },
+                ),
+              
+              const Spacer(),
+              const Divider(),
+              
+              ListTile(
+                leading: const Icon(Icons.exit_to_app, color: Colors.redAccent),
+                title: const Text('Logout', style: TextStyle(color: Colors.redAccent)),
+                onTap: () => _logout(context),
+              ),
+              const SizedBox(height: 20),
+            ],
+          );
+        },
       ),
     );
   }

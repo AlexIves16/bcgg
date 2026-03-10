@@ -33,9 +33,12 @@ class UpdateManager {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        // tag_name is like "v13" — parse the integer
-        final tagName = data['tag_name'] as String? ?? 'v0';
-        final serverVersion = int.tryParse(tagName.replaceAll('v', '')) ?? 0;
+        // tag_name can be "v25" or "0.25"
+        final tagName = data['tag_name'] as String? ?? '0';
+        
+        // Extract the last numeric part (e.g., "0.25" -> "25", "v25" -> "25")
+        final String numericPart = tagName.split('.').last.replaceAll(RegExp(r'[^0-9]'), '');
+        final serverVersion = int.tryParse(numericPart) ?? 0;
 
         // Find the APK asset download URL
         final assets = (data['assets'] as List?)?.cast<Map<String, dynamic>>();

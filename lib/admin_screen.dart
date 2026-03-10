@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'network_manager.dart';
 import 'combat/sound_combat_overlay.dart';
@@ -29,7 +30,55 @@ class _AdminScreenState extends State<AdminScreen> {
   @override
   void initState() {
     super.initState();
+    _checkAdminAccess();
     _loadSettings();
+  }
+
+  Future<void> _checkAdminAccess() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      debugPrint("[ADMIN] No user logged in");
+      if (mounted) Navigator.pop(context);
+      return;
+    }
+    
+    debugPrint("[ADMIN] Checking access for UID: ${user.uid}");
+    try {
+      final doc = await FirebaseFirestore.instance.collection('users').doc(user.uid).get();
+      
+      if (!doc.exists) {
+        debugPrint("[ADMIN] Document does NOT exist for UID: ${user.uid}");
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error: User profile not found in Firestore (${user.uid.substring(0,6)})')),
+          );
+          Navigator.pop(context);
+        }
+        return;
+      }
+
+      final data = doc.data();
+      final bool isAdmin = data?['isAdmin'] == true;
+      debugPrint("[ADMIN] Document data: $data");
+      debugPrint("[ADMIN] isAdmin flag: $isAdmin");
+
+      if (!isAdmin) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Access Denied: Not an Admin')),
+          );
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      debugPrint("[ADMIN] Firestore Error: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Firestore Error: $e')),
+        );
+        Navigator.pop(context);
+      }
+    }
   }
 
   Future<void> _loadSettings() async {
