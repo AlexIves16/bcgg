@@ -71,7 +71,7 @@ class WebRtcManager {
     if (_currentGroupId != null) await leaveGroup();
     
     _currentGroupId = groupId;
-    final myUid = _auth.currentUser?.uid;
+    final myUid = auth.currentUser?.uid;
     if (myUid == null) return;
 
     debugPrint('[WebRTC] Joining group: $groupId');
@@ -79,7 +79,7 @@ class WebRtcManager {
     // 1. Register myself in the group
     await _db.child('groups/$groupId/peers/$myUid').set({
       'joinedAt': ServerValue.timestamp,
-      'name': _auth.currentUser?.displayName ?? _auth.currentUser?.email?.split('@')[0] ?? 'Explorer',
+      'name': auth.currentUser?.displayName ?? auth.currentUser?.email?.split('@')[0] ?? 'Explorer',
     });
 
     // 2. Listen for other peers in the group
@@ -189,7 +189,7 @@ class WebRtcManager {
   }
 
   void _sendSignaling(String peerUid, Map<String, dynamic> data) {
-    final myUid = _auth.currentUser?.uid;
+    final myUid = auth.currentUser?.uid;
     if (myUid == null) return;
     _db.child('signaling/$peerUid/$myUid').update(data);
   }
@@ -203,8 +203,8 @@ class WebRtcManager {
   }
 
   void broadcastMessage(String text) {
-    final myUid = _auth.currentUser?.uid;
-    final myName = _auth.currentUser?.displayName ?? _auth.currentUser?.email?.split('@')[0] ?? 'Explorer';
+    final myUid = auth.currentUser?.uid;
+    final myName = auth.currentUser?.displayName ?? auth.currentUser?.email?.split('@')[0] ?? 'Explorer';
     
     final msg = GroupMessage(
       text: text,
@@ -226,7 +226,7 @@ class WebRtcManager {
   }
 
   Future<void> leaveGroup() async {
-    final myUid = _auth.currentUser?.uid;
+    final myUid = auth.currentUser?.uid;
     if (myUid != null && _currentGroupId != null) {
       await _db.child('groups/$_currentGroupId/peers/$myUid').remove();
     }
