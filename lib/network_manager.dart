@@ -1,3 +1,8 @@
+import 'package:firebase_core/firebase_core.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:flutter/foundation.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:async';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -6,10 +11,9 @@ class NetworkManager {
   factory NetworkManager() => _instance;
   NetworkManager._internal();
 
-  final _db = FirebaseDatabase.instanceFor(
-    app: Firebase.app(),
-    databaseURL: 'https://game26-base-default-rtdb.europe-west1.firebasedatabase.app/',
-  ).ref();
+  static const _rtdbUrl = 'https://game26-base-default-rtdb.europe-west1.firebasedatabase.app';
+  late DatabaseReference _db;
+  bool _dbInitialized = false;
   StreamSubscription? _mapSubscription;
   StreamSubscription? _playersSubscription;
 
@@ -20,31 +24,45 @@ class NetworkManager {
   String _appVersion = "Unknown";
   String get appVersion => _appVersion;
 
+  List<dynamic> _lastPlayers = [];
+  List<dynamic> get lastPlayers => _lastPlayers;
+
   final _playersController = StreamController<List<dynamic>>.broadcast();
   Stream<List<dynamic>> get playersStream => _playersController.stream;
 
   final _monstersController = StreamController<List<dynamic>>.broadcast();
   Stream<List<dynamic>> get monstersStream => _monstersController.stream;
 
-  static String get serverUrl => "Firebase Realtime Database";
-
-  void setServerUrl(String url) {}
-
   Future<void> connect() async {
     debugPrint('[RTDB] Connecting to Firebase Realtime Database...');
+    debugPrint('[RTDB] Using regional URL: $_rtdbUrl');
+    
+    // Initialize DB reference with explicit regional URL
+    if (!_dbInitialized) {
+      _db = FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL: _rtdbUrl,
+      ).ref();
+      _dbInitialized = true;
+    }
     
     // Fetch version
     try {
       final info = await PackageInfo.fromPlatform();
       _appVersion = "${info.version}+${info.buildNumber}";
+      debugPrint('[RTDB] App Version: $_appVersion');
     } catch (e) {
       debugPrint('[RTDB] Failed to get app version: $e');
     }
+
+    final user = FirebaseAuth.instance.currentUser;
+    debugPrint('[RTDB] Current User: ${user?.email} (UID: ${user?.uid})');
 
     // 1. Listen to Map Elements (Monsters and Clouds)
     _mapSubscription?.cancel();
     _mapSubscription = _db.child('map').onValue.listen((event) {
       final value = event.snapshot.value;
+      // debugPrint('[RTDB] RAW MAP DATA: $value');
       if (value == null) {
         debugPrint('[RTDB] Map data is NULL');
         return;
@@ -76,7 +94,7 @@ class NetworkManager {
         elements.addAll((data['clouds'] as List).where((v) => v != null));
       }
       
-      debugPrint('[RTDB] Received ${elements.length} map elements');
+      // debugPrint('[RTDB] Received ${elements.length} map elements');
       _monstersController.add(elements);
     });
 
@@ -84,9 +102,11 @@ class NetworkManager {
     _playersSubscription?.cancel();
     _playersSubscription = _db.child('players').onValue.listen((event) {
       final value = event.snapshot.value;
+      // debugPrint('[RTDB] RAW PLAYERS DATA: $value');
       if (value == null) {
         debugPrint('[RTDB] Player data is NULL');
         _playersController.add([]);
+        _lastPlayers = []; // Store last known
         return;
       }
       
@@ -97,12 +117,12 @@ class NetworkManager {
         playerList = value.where((v) => v != null).toList();
       }
       
-      debugPrint('[RTDB] Received ${playerList.length} players');
+      // debugPrint('[RTDB] Received ${playerList.length} players');
+      _lastPlayers = playerList; // Store last known
       _playersController.add(playerList);
     });
 
     // 3. Sync User Info from Firestore
-    final user = FirebaseAuth.instance.currentUser;
     if (user != null) {
       FirebaseFirestore.instance.collection('users').doc(user.uid).snapshots().listen((doc) {
         if (doc.exists) {
@@ -115,6 +135,48 @@ class NetworkManager {
         }
       });
     }
+
+    // Auto-create Firestore profile if it doesn't exist
+    _ensureFirestoreProfile();
+  }
+
+  DateTime? _lastProfileSync;
+
+  Future<void> _ensureFirestoreProfile() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null && user.email != null) {
+      // Throttle: Only sync once every 10 minutes to avoid spam
+      if (_lastProfileSync != null && 
+          DateTime.now().difference(_lastProfileSync!).inMinutes < 10) {
+        return;
+      }
+      _lastProfileSync = DateTime.now();
+
+      try {
+        final userDoc = FirebaseFirestore.instance.collection('users').doc(user.uid);
+        final doc = await userDoc.get();
+        
+        final Map<String, dynamic> initialData = {
+          'email': user.email!.toLowerCase(),
+          'lastActive': FieldValue.serverTimestamp(),
+          'appVersion': _appVersion,
+        };
+
+        if (!doc.exists) {
+          debugPrint("[FIRESTORE] Auto-creating NEW user profile for ${user.email}");
+          initialData['username'] = user.displayName ?? user.email!.split('@')[0];
+          initialData['createdAt'] = FieldValue.serverTimestamp();
+          await userDoc.set(initialData, SetOptions(merge: true));
+        } else {
+          // Silent update for existing profiles
+          await userDoc.set(initialData, SetOptions(merge: true));
+        }
+      } catch (e) {
+        debugPrint("[FIRESTORE] !!! Profile sync error: $e");
+      }
+    } else {
+      debugPrint("[FIRESTORE] No user or email found to sync profile.");
+    }
   }
 
   void stop() {
@@ -122,7 +184,18 @@ class NetworkManager {
     _playersSubscription?.cancel();
   }
 
+  DateTime? _lastLocationSent;
+
   void sendLocation(double latitude, double longitude) {
+    if (!_dbInitialized) return;
+
+    // Throttle: Don't send location more than once every 3 seconds
+    if (_lastLocationSent != null && 
+        DateTime.now().difference(_lastLocationSent!).inSeconds < 3) {
+      return;
+    }
+    _lastLocationSent = DateTime.now();
+
     _lastLat = latitude;
     _lastLng = longitude;
     final user = FirebaseAuth.instance.currentUser;
@@ -138,7 +211,8 @@ class NetworkManager {
       'lng': longitude,
       'lastUpdated': ServerValue.timestamp,
     }).then((_) {
-       // Success log
+       debugPrint('[RTDB] Location synced for ${user.email} -> $latitude, $longitude');
+       _ensureFirestoreProfile();
     }).catchError((err) {
       debugPrint('[RTDB] Error sending location for ${user.email}: $err');
     });

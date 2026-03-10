@@ -13,9 +13,13 @@ import 'ble_manager.dart';
 import 'network_manager.dart';
 import 'gesture_combat_screen.dart';
 import 'gesture_calibration_screen.dart';
+import 'combat/sound_combat_overlay.dart';
+import 'profile/voice_calibration_screen.dart';
 import 'energy_mining_dialog.dart';
 import 'update_manager.dart';
 import 'profile/profile_drawer.dart';
+import 'admin_screen.dart';
+import 'package:firebase_database/firebase_database.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -44,13 +48,28 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   
   int _userXp = 0;
   int _userEnergy = 0;
+  double _visibilityRadius = 300;
 
   @override
   void initState() {
     super.initState();
     _initServices();
+    _startAdminSettingsListener();
     // Ticker drives per-frame updates for entity position interpolation
     _ticker = createTicker((_) => _updateEntityPositions())..start();
+  }
+
+  void _startAdminSettingsListener() {
+    FirebaseDatabase.instanceFor(
+      app: FirebaseDatabase.instance.app,
+      databaseURL: 'https://game26-base-default-rtdb.europe-west1.firebasedatabase.app',
+    ).ref('admin_settings/visibilityRadius').onValue.listen((event) {
+      final val = event.snapshot.value;
+      if (val != null && mounted) {
+        setState(() => _visibilityRadius = (val as num).toDouble());
+        debugPrint("[CONFIG] Visibility Radius updated: $_visibilityRadius");
+      }
+    });
   }
 
   void _updateEntityPositions() {
@@ -86,6 +105,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
 
     try {
+      debugPrint("0. Connecting to Network Manager...");
+      await NetworkManager().connect();
+      
       debugPrint("1. Requesting location permissions...");
       await LocationManager().requestPermissions();
       debugPrint("2. Starting location tracking stream...");
@@ -116,6 +138,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           ),
         );
       }
+    }
     try {
       final position = await Geolocator.getCurrentPosition(
         desiredAccuracy: LocationAccuracy.medium,
@@ -196,7 +219,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       for (var data in playersData) {
         if (data == null) continue;
         
-        // data looks like { id: socket.id, uid: userUid, lat: number, lng: number, lastUpdated: number }
+        // data looks like { uid: userUid, lat: number, lng: number, lastUpdated: number, email: string }
         if (data['uid'] == currentUser?.uid) continue; // Не показываем себя маркером как других
         
         // Calculate distance from current location
@@ -207,8 +230,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               data['lat'], data['lng']);
         }
 
-        // Only render players within 300 meters
-        if (distanceStr > 300) continue;
+        // Only render players within visibility radius
+        if (distanceStr > _visibilityRadius) continue;
         
         Widget playerAvatar;
         String playerLabel = data['username'] ?? data['email']?.split('@')?[0] ?? 'Explorer';
@@ -265,7 +288,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   void _startListeningToMonsters() {
     _monstersSubscription = NetworkManager().monstersStream.listen((List<dynamic> elementsData) {
       if (!mounted) return;
-      debugPrint('[MAP] Received ${elementsData.length} elements for rendering');
+      // debugPrint('[MAP] Received ${elementsData.length} elements for rendering');
       final now = DateTime.now();
       final incomingIds = <String>{};
 
@@ -273,6 +296,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         if (element == null) continue;
         final id = element['id']?.toString();
         if (id == null) continue;
+
+        // Proximity Filtering
+        if (_currentPosition != null) {
+          final dist = Geolocator.distanceBetween(
+            _currentPosition!.latitude, _currentPosition!.longitude,
+            (element['lat'] as num).toDouble(), (element['lng'] as num).toDouble()
+          );
+          if (dist > _visibilityRadius) continue;
+        }
+
         incomingIds.add(id);
         
         // Use more robust parsing for coordinates
@@ -401,10 +434,33 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   bool success = await SensorManager().consumeEnergy(cost);
                   if (success) {
                     if (mounted) {
-                      Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (context) => GestureCombatScreen(monster: monster)),
-                      );
+                      final bool isSoundMonster = 
+                          monster['type'] == 'banshee' || 
+                          monster['type'] == 'siren' || 
+                          monster['isSound'] == true;
+
+                      if (isSoundMonster) {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => SoundCombatOverlay(
+                              monster: monster,
+                              onWin: () {
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Victory! The resonance purified the soul.'), backgroundColor: Colors.green),
+                                );
+                              },
+                              onLose: () => Navigator.pop(context),
+                            ),
+                          ),
+                        );
+                      } else {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (context) => GestureCombatScreen(monster: monster)),
+                        );
+                      }
                     }
                   }
                 }
@@ -458,22 +514,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               )
             ),
           ),
-          // Version Display Overlay
-          Positioned(
-            bottom: 80,
-            right: 16,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black54,
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                'v${NetworkManager().appVersion}',
-                style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-              ),
-            ),
-          ),
         ],
       ),
       body: _currentPosition == null
@@ -519,21 +559,40 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                     final element = entry.value;
                     final pos = _entityCurrentPos[id];
                     if (pos == null) return null;
-                    final isBug = element['type'] == 'wild_bug';
+                    
+                    final type = element['type']?.toString() ?? '';
+                    final bool isMonster = type == 'wild_bug' || type == 'banshee' || type == 'siren' || element['isSound'] == true;
+                    
+                    String emoji;
+                    String label;
+                    
+                    if (type == 'energy_cloud') {
+                      emoji = '☁️';
+                      label = 'Energy';
+                    } else if (type == 'banshee') {
+                      emoji = '👻';
+                      label = 'Banshee';
+                    } else if (type == 'siren') {
+                      emoji = '🧜‍♀️';
+                      label = 'Siren';
+                    } else {
+                      emoji = '🐞';
+                      label = 'Wild Bug';
+                    }
+
                     return Marker(
                       width: 80.0,
-                      height: 70.0,
-                      point: pos, // Smoothly interpolated position
+                      height: 85.0,
+                      point: pos, 
                       child: GestureDetector(
                         behavior: HitTestBehavior.opaque,
-                        onTap: () => isBug ? _handleMonsterTap(element) : _handleCloudTap(element),
+                        onTap: () => isMonster ? _handleMonsterTap(element) : _handleCloudTap(element),
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(
-                              isBug ? Icons.bug_report : Icons.cloud,
-                              color: isBug ? Colors.red : Colors.blueAccent,
-                              size: 40.0,
+                            Text(
+                              emoji,
+                              style: const TextStyle(fontSize: 40),
                             ),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
@@ -542,7 +601,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                                 borderRadius: BorderRadius.circular(4),
                               ),
                               child: Text(
-                                isBug ? 'Wild Bug' : 'Energy',
+                                label,
                                 style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
                               ),
                             ),
@@ -551,6 +610,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                       ),
                     );
                   }).whereType<Marker>().toList(),
+                ),
+                // Version Display Overlay
+                Positioned(
+                  bottom: 120,
+                  right: 16,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'v${NetworkManager().appVersion}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                    ),
+                  ),
                 ),
               ],
             ),

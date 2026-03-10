@@ -17,6 +17,38 @@ admin.initializeApp({
 });
 
 const db = admin.database();
+const firestore = admin.firestore();
+
+/**
+ * Ensures player exists in Firestore 'users' collection (persistent Player Table)
+ */
+async function registerPlayerInFirestore(player) {
+  if (!player || !player.uid || !player.email) return;
+  try {
+    const emailLower = player.email.toLowerCase();
+    const userRef = firestore.collection('users').doc(player.uid);
+    const doc = await userRef.get();
+
+    if (!doc.exists) {
+      console.log(`[FIRESTORE] Creating NEW registry entry for: ${emailLower}`);
+      await userRef.set({
+        email: emailLower,
+        username: player.username || player.email.split('@')[0],
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastSeen: admin.firestore.FieldValue.serverTimestamp(),
+        source: 'server_auto_reg'
+      });
+    } else {
+      // Update email to lowercase if needed and refresh lastSeen
+      await userRef.update({
+        email: emailLower,
+        lastSeen: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  } catch (err) {
+    console.error(`[FIRESTORE] Sync error for ${player.email}:`, err);
+  }
+}
 
 // Раздача статики для APK-файлов (OTA обновления)
 app.use('/download', express.static(path.join(__dirname, 'public')));
@@ -36,10 +68,35 @@ let clouds = [];
 let monsterIdCounter = Date.now();
 let cloudIdCounter = Date.now();
 
-const MAX_MONSTERS = 20;
-const MAX_CLOUDS = 10;
-const SPAWN_RADIUS = 0.001;
-const DESPAWN_DISTANCE = 2000; // Despawn if > 2km from any player
+// Default values (will be overridden by RTDB)
+let configs = {
+  maxMonsters: 20,
+  maxClouds: 10,
+  spawnRadius: 0.001,
+  despawnDistance: 1000,
+  visibilityRadius: 300,
+  basicMobsEnabled: true,
+  sonicMobsEnabled: true,
+  vocalMobsEnabled: true
+};
+
+// Listen for admin settings
+db.ref('admin_settings').on('value', (snapshot) => {
+  const newConfig = snapshot.val();
+  if (newConfig) {
+    configs = { ...configs, ...newConfig };
+    console.log('[CONFIG] Updated settings:', configs);
+
+    // Handle immediate reset
+    if (newConfig.resetTrigger) {
+      console.log('[CONFIG] Reset triggered!');
+      monsters = [];
+      clouds = [];
+      db.ref('admin_settings/resetTrigger').set(false);
+      syncToFirebase();
+    }
+  }
+});
 
 function randomOffset(radius) {
   return (Math.random() - 0.5) * radius * 2;
@@ -76,12 +133,11 @@ async function syncToFirebase() {
   }
 }
 
-// Clear old map entities on start to prevent "Moscow monsters" blocking spawns
+// Clear old map entities on start
 db.ref('map').remove();
 
 // Игровой цикл на сервере (запускается каждые 5 секунд)
 setInterval(async () => {
-  // Try to get active players from RTDB to spawn things near them
   let activePlayers = [];
   try {
     const snapshot = await db.ref('players').once('value');
@@ -94,54 +150,73 @@ setInterval(async () => {
 
   if (activePlayers.length === 0) {
     console.log('[GAME] Waiting for players to join...');
-    return; // Don't spawn fallback entities
+    return;
   }
+
+  console.log(`[GAME] Heartbeat: ${activePlayers.length} players active.`);
 
   // 0. Despawn far entities
   monsters = monsters.filter(monster => {
-    return activePlayers.some(p => getDistance(monster.lat, monster.lng, p.lat, p.lng) < DESPAWN_DISTANCE);
+    return activePlayers.some(p => getDistance(monster.lat, monster.lng, p.lat, p.lng) < configs.despawnDistance);
   });
 
   clouds = clouds.filter(cloud => {
-    return activePlayers.some(p => getDistance(cloud.lat, cloud.lng, p.lat, p.lng) < DESPAWN_DISTANCE);
+    return activePlayers.some(p => getDistance(cloud.lat, cloud.lng, p.lat, p.lng) < configs.despawnDistance);
   });
 
-  // 1. Спавн монстров
-  if (monsters.length < MAX_MONSTERS) {
-    const target = activePlayers[Math.floor(Math.random() * activePlayers.length)];
+  // 1. Spawning strategy: Ensure each player has at least 5 monsters near them if possible
+  activePlayers.forEach(player => {
+    const monstersNear = monsters.filter(m => getDistance(m.lat, m.lng, player.lat, player.lng) < 500).length;
+    const cloudsNear = clouds.filter(c => getDistance(c.lat, c.lng, player.lat, player.lng) < 500).length;
 
-    const shapes = ['circle', 'square', 'triangle'];
-    const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
-    const energyCost = Math.floor(Math.random() * 3) * 10 + 10;
+    // Spawn monsters near this player if under cap
+    if (monsters.length < configs.maxMonsters && monstersNear < 5) {
+      const availableTypes = [];
+      const bEnabled = configs.basicMobsEnabled !== false;
+      const sEnabled = configs.sonicMobsEnabled === true || configs.sonicMobsEnabled === undefined;
+      const vEnabled = configs.vocalMobsEnabled === true || configs.vocalMobsEnabled === undefined;
 
-    const newMonster = {
-      id: `monster_${monsterIdCounter++}`,
-      type: 'wild_bug',
-      hp: 100,
-      requiredShape: randomShape,
-      energyCost: energyCost,
-      timeLimit: 15,
-      lat: target.lat + randomOffset(SPAWN_RADIUS),
-      lng: target.lng + randomOffset(SPAWN_RADIUS)
-    };
-    monsters.push(newMonster);
-  }
+      if (bEnabled) availableTypes.push({ type: 'wild_bug', name: 'Wild Bug', isSound: false });
+      if (sEnabled) availableTypes.push({ type: 'banshee', name: 'Sonic Banshee', isSound: true });
+      if (vEnabled) availableTypes.push({ type: 'siren', name: 'Vocal Siren', isSound: true });
 
-  // 2. Спавн облаков
-  if (clouds.length < MAX_CLOUDS) {
-    const target = activePlayers[Math.floor(Math.random() * activePlayers.length)];
+      // Fallback if none enabled
+      if (availableTypes.length === 0) availableTypes.push({ type: 'wild_bug', name: 'Wild Bug', isSound: false });
 
-    const newCloud = {
-      id: `cloud_${cloudIdCounter++}`,
-      type: 'energy_cloud',
-      capacity: Math.floor(Math.random() * 120) + 30,
-      lat: target.lat + randomOffset(SPAWN_RADIUS),
-      lng: target.lng + randomOffset(SPAWN_RADIUS)
-    };
-    clouds.push(newCloud);
-  }
+      const mob = availableTypes[Math.floor(Math.random() * availableTypes.length)];
 
-  // 3. AI Movement
+      const shapes = ['circle', 'square', 'triangle'];
+      const randomShape = shapes[Math.floor(Math.random() * shapes.length)];
+
+      monsters.push({
+        id: `monster_${monsterIdCounter++}`,
+        type: mob.type,
+        name: mob.name,
+        isSound: mob.isSound,
+        hp: 100,
+        requiredShape: randomShape,
+        energyCost: Math.floor(Math.random() * 3) * 10 + 10,
+        timeLimit: 15,
+        lat: player.lat + randomOffset(configs.spawnRadius),
+        lng: player.lng + randomOffset(configs.spawnRadius)
+      });
+      console.log(`[GAME] Spawned ${mob.type} (B:${bEnabled}, S:${sEnabled}, V:${vEnabled}) near ${player.email}`);
+    }
+
+    // Spawn clouds near this player if under cap
+    if (clouds.length < configs.maxClouds && cloudsNear < 3) {
+      clouds.push({
+        id: `cloud_${cloudIdCounter++}`,
+        type: 'energy_cloud',
+        capacity: Math.floor(Math.random() * 120) + 30,
+        lat: player.lat + randomOffset(configs.spawnRadius),
+        lng: player.lng + randomOffset(configs.spawnRadius)
+      });
+      console.log(`[GAME] Spawned cloud near ${player.email}`);
+    }
+  });
+
+  // 2. AI Movement
   monsters.forEach(monster => {
     monster.lat += randomOffset(0.00003);
     monster.lng += randomOffset(0.00003);
@@ -152,11 +227,8 @@ setInterval(async () => {
     cloud.lng += randomOffset(0.00001);
   });
 
-  // 4. Sync to DB
+  // 3. Sync to DB
   await syncToFirebase();
-
-  // Also keep Socket.IO for debugging
-  io.emit('mapElementsUpdate', [...monsters, ...clouds]);
 
 }, 5000);
 
@@ -187,11 +259,15 @@ db.ref('actions').on('child_added', async (snapshot) => {
 db.ref('players').on('child_added', (snapshot) => {
   const p = snapshot.val();
   console.log(`[PLAYER] Joined: ${p.email} (${p.uid})`);
+  registerPlayerInFirestore(p);
 });
 
 db.ref('players').on('child_changed', (snapshot) => {
   const p = snapshot.val();
-  console.log(`[PLAYER] Updated: ${p.email} at ${p.lat}, ${p.lng}`);
+  // We don't log every move to avoid spam, but we register periodically
+  if (Math.random() < 0.1) { // 10% chance to sync on update to avoid heavy traffic
+    registerPlayerInFirestore(p);
+  }
 });
 
 db.ref('players').on('child_removed', (snapshot) => {

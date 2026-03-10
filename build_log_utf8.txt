@@ -1,39 +1,164 @@
 ﻿Running Gradle task 'assembleRelease'...                        
-flutter : lib/map_screen.dart:121:30: Error: The getter 'position' 
-isn't defined for the type '_MapScreenState'.
+flutter : lib/map_screen.dart:93:17: Error: Can't find '}' to 
+match '{'.
 строка:1 знак:1
-+ flutter build apk --release --no-pub --no-android-gradle-daemon > 
-bui ...
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-~~~
-    + CategoryInfo          : NotSpecified: (lib/map_screen....apSc 
-   reenState'.:String) [], RemoteException
++ flutter build apk --release --no-pub --no-android-gradle-daemon 
+> bui ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo          : NotSpecified: (lib/map_screen....'  
+   to match '{'.:String) [], RemoteException
     + FullyQualifiedErrorId : NativeCommandError
  
- - '_MapScreenState' is from 'package:bcgame/map_screen.dart' 
-('lib/map_screen.dart').
+    } catch (e) {
+                ^
+lib/network_manager.dart:10:10: Error: Undefined name 'Firebase'.
+    app: Firebase.app(),
+         ^^^^^^^^
+lib/network_manager.dart:9:15: Error: Undefined name 
+'FirebaseDatabase'.
+  final _db = FirebaseDatabase.instanceFor(
+              ^^^^^^^^^^^^^^^^
+lib/network_manager.dart:34:5: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+    debugPrint('[RTDB] Connecting to Firebase Realtime 
+Database...');
+    ^^^^^^^^^^
+lib/network_manager.dart:41:7: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+      debugPrint('[RTDB] Failed to get app version: $e');
+      ^^^^^^^^^^
+lib/network_manager.dart:49:9: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+        debugPrint('[RTDB] Map data is NULL');
+        ^^^^^^^^^^
+lib/network_manager.dart:79:7: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+      debugPrint('[RTDB] Received ${elements.length} map 
+elements');
+      ^^^^^^^^^^
+lib/network_manager.dart:88:9: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+        debugPrint('[RTDB] Player data is NULL');
+        ^^^^^^^^^^
+lib/network_manager.dart:100:7: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+      debugPrint('[RTDB] Received ${playerList.length} players');
+      ^^^^^^^^^^
+lib/network_manager.dart:105:18: Error: The getter 'FirebaseAuth' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
 Try correcting the name to the name of an existing getter, or 
-defining a getter or field named 'position'.
-          _currentPosition = position;
-                             ^^^^^^^^
-lib/map_screen.dart:124:37: Error: The getter 'position' isn't 
-defined for the type '_MapScreenState'.
- - '_MapScreenState' is from 'package:bcgame/map_screen.dart' 
-('lib/map_screen.dart').
+defining a getter or field named 'FirebaseAuth'.
+    final user = FirebaseAuth.instance.currentUser;
+                 ^^^^^^^^^^^^
+lib/network_manager.dart:107:7: Error: The getter 
+'FirebaseFirestore' isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
 Try correcting the name to the name of an existing getter, or 
-defining a getter or field named 'position'.
-      NetworkManager().sendLocation(position.latitude, 
-position.longitude);
-                                    ^^^^^^^^
-lib/map_screen.dart:124:56: Error: The getter 'position' isn't 
-defined for the type '_MapScreenState'.
- - '_MapScreenState' is from 'package:bcgame/map_screen.dart' 
-('lib/map_screen.dart').
+defining a getter or field named 'FirebaseFirestore'.
+      FirebaseFirestore.instance.collection('users').doc(user.uid)
+.snapshots().listen((doc) {
+      ^^^^^^^^^^^^^^^^^
+lib/network_manager.dart:128:18: Error: The getter 'FirebaseAuth' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
 Try correcting the name to the name of an existing getter, or 
-defining a getter or field named 'position'.
-      NetworkManager().sendLocation(position.latitude, 
-position.longitude);
-                                                       ^^^^^^^^
+defining a getter or field named 'FirebaseAuth'.
+    final user = FirebaseAuth.instance.currentUser;
+                 ^^^^^^^^^^^^
+lib/network_manager.dart:139:22: Error: The getter 'ServerValue' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'ServerValue'.
+      'lastUpdated': ServerValue.timestamp,
+                     ^^^^^^^^^^^
+lib/network_manager.dart:143:7: Error: The method 'debugPrint' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing method, or 
+defining a method named 'debugPrint'.
+      debugPrint('[RTDB] Error sending location for 
+${user.email}: $err');
+      ^^^^^^^^^^
+lib/network_manager.dart:148:18: Error: The getter 'FirebaseAuth' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'FirebaseAuth'.
+    final user = FirebaseAuth.instance.currentUser;
+                 ^^^^^^^^^^^^
+lib/network_manager.dart:157:20: Error: The getter 'ServerValue' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'ServerValue'.
+      'timestamp': ServerValue.timestamp,
+                   ^^^^^^^^^^^
+lib/network_manager.dart:162:18: Error: The getter 'FirebaseAuth' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'FirebaseAuth'.
+    final user = FirebaseAuth.instance.currentUser;
+                 ^^^^^^^^^^^^
+lib/network_manager.dart:172:20: Error: The getter 'ServerValue' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'ServerValue'.
+      'timestamp': ServerValue.timestamp,
+                   ^^^^^^^^^^^
+lib/network_manager.dart:177:18: Error: The getter 'FirebaseAuth' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'FirebaseAuth'.
+    final user = FirebaseAuth.instance.currentUser;
+                 ^^^^^^^^^^^^
+lib/network_manager.dart:185:20: Error: The getter 'ServerValue' 
+isn't defined for the type 'NetworkManager'.
+ - 'NetworkManager' is from 'package:bcgame/network_manager.dart' 
+('lib/network_manager.dart').
+Try correcting the name to the name of an existing getter, or 
+defining a getter or field named 'ServerValue'.
+      'timestamp': ServerValue.timestamp,
+                   ^^^^^^^^^^^
 Target kernel_snapshot_program failed: Exception
 
 
@@ -51,6 +176,6 @@ non-zero exit value 1
 > Run with --scan to get full insights.
 > Get more help at https://help.gradle.org.
 
-BUILD FAILED in 56s
-Running Gradle task 'assembleRelease'...                           56.6s
+BUILD FAILED in 58s
+Running Gradle task 'assembleRelease'...                           59.4s
 Gradle task assembleRelease failed with exit code 1

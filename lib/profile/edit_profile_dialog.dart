@@ -79,7 +79,7 @@ class _EditProfileDialogState extends State<EditProfileDialog> {
       await FirebaseFirestore.instance.collection('users').doc(currentUser!.uid).set({
         'username': username,
         'avatarBase64': _avatarBase64,
-        'email': currentUser!.email,
+        'email': currentUser!.email?.toLowerCase(),
       }, SetOptions(merge: true));
 
       if (mounted) {

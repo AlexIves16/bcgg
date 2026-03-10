@@ -8,6 +8,8 @@ import '../location_manager.dart';
 import '../sensor_manager.dart';
 import 'friends_screen.dart';
 import 'edit_profile_dialog.dart';
+import 'voice_calibration_screen.dart';
+import '../admin_screen.dart';
 
 class ProfileDrawer extends StatefulWidget {
   const ProfileDrawer({super.key});
@@ -145,11 +147,36 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
             },
           ),
           ListTile(
+            leading: const Icon(Icons.mic),
+            title: const Text('Voice Calibration'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.pop(context); // Close Drawer
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const VoiceCalibrationScreen()),
+              );
+            },
+          ),
+          ListTile(
             leading: const Icon(Icons.military_tech),
             title: const Text('Achievements (Coming Soon)'),
             enabled: false,
             onTap: () {},
           ),
+          
+          if (user?.email == 'almalexyz@gmail.com')
+            ListTile(
+              leading: const Icon(Icons.admin_panel_settings, color: Colors.orangeAccent),
+              title: const Text('Admin Panel', style: TextStyle(color: Colors.orangeAccent)),
+              onTap: () {
+                Navigator.pop(context); // Close Drawer
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => const AdminScreen()),
+                );
+              },
+            ),
           
           const Spacer(),
           const Divider(),

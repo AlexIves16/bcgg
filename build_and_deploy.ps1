@@ -1,5 +1,5 @@
 param (
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [ValidateSet("Production", "Nightly")]
     [String]$Environment = "Production"
 )
@@ -10,12 +10,13 @@ $ErrorActionPreference = "Stop"
 $githubOwner = "AlexIves16"
 $githubRepo = "bcgg"
 
-# Environment-specific settings
+# Environment-specific settings (Firebase RTDB — no external server needed)
 if ($Environment -eq "Nightly") {
-    $serverUrl = "https://bcgg-nightly.up.railway.app" # Replace with your actual nightly URL
+    $serverUrl = "firebase-rtdb-nightly"
     $releaseSuffix = "-nightly"
-} else {
-    $serverUrl = "https://bcgg-production.up.railway.app"
+}
+else {
+    $serverUrl = "firebase-rtdb-production"
     $releaseSuffix = ""
 }
 
@@ -63,8 +64,14 @@ $branch = if ($Environment -eq "Nightly") { "develop" } else { "master" }
 git pull --rebase origin $branch
 git push origin $branch
 
-# --- Step 4: Publish GitHub Release ---
-$tag = "v$newBuildNum$releaseSuffix"
+# --- Step 4: Copy APK to Game Server for OTA ---
+$publicApkPath = Join-Path $projectRoot "game-server\public\app-release.apk"
+Write-Host "Copying APK to $publicApkPath for OTA..." -ForegroundColor Cyan
+if (-Not (Test-Path (Join-Path $projectRoot "game-server\public"))) { New-Item -ItemType Directory -Path (Join-Path $projectRoot "game-server\public") }
+Copy-Item -Path "$apkPath" -Destination "$publicApkPath" -Force
+
+# --- Step 5: Publish GitHub Release ---
+$tag = "0.$newBuildNum$releaseSuffix"
 $releaseTitle = "Digital Ether $tag"
 $releaseNotes = "$Environment release $tag built $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
 

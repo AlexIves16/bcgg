@@ -8,7 +8,10 @@ list(APPEND FLUTTER_PLUGIN_LIST
   firebase_auth
   firebase_core
   flutter_blue_plus_winrt
+  flutter_secure_storage_windows
+  flutter_webrtc
   geolocator_windows
+  record_windows
   url_launcher_windows
 )
 

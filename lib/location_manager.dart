@@ -8,6 +8,9 @@ class LocationManager {
   LocationManager._internal();
 
   StreamSubscription<Position>? _positionSubscription;
+  Position? _lastPosition;
+  Position? get lastPosition => _lastPosition;
+
   final _positionController = StreamController<Position>.broadcast();
   Stream<Position> get positionStream => _positionController.stream;
 
@@ -35,8 +38,12 @@ class LocationManager {
 
   void startTracking() {
     _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 20),
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high, 
+        distanceFilter: 5, // Reduced from 20m for smoother updates
+      ),
     ).listen((Position position) {
+      _lastPosition = position; // Update cache
       _positionController.add(position); // Broadcast to UI
       _updateUserLocation(position);
     });

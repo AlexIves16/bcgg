@@ -35,11 +35,24 @@ class _AddFriendDialogState extends State<AddFriendDialog> {
 
     try {
       // 1. Find the target user by email
-      final querySnapshot = await FirebaseFirestore.instance
-          .collection('users')
-          .where('email', isEqualTo: targetEmail)
-          .limit(1)
-          .get();
+      debugPrint("[SEARCH] Searching for explorer with email: $targetEmail");
+      
+      QuerySnapshot querySnapshot;
+      try {
+        querySnapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .where('email', isEqualTo: targetEmail)
+            .limit(1)
+            .get();
+        debugPrint("[SEARCH] Query successful. Found ${querySnapshot.docs.length} matches.");
+      } catch (e) {
+        debugPrint("[SEARCH] !!! Query FAILED: $e");
+        setState(() {
+          _message = 'Search failed: $e';
+          _isLoading = false;
+        });
+        return;
+      }
 
       if (querySnapshot.docs.isEmpty) {
         setState(() => _message = 'No explorer found with this email.');
