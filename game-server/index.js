@@ -274,6 +274,53 @@ db.ref('players').on('child_removed', (snapshot) => {
   console.log(`[PLAYER] Left: ${snapshot.key}`);
 });
 
+// --- NEW: P2P Chat & Signaling Monitor (For Debugging) ---
+db.ref('groups').on('child_added', (snapshot) => {
+  console.log(`[CONVO] New group created: ${snapshot.key}`);
+});
+
+db.ref('groups').on('value', (snapshot) => {
+  const groups = snapshot.val();
+  if (!groups) return;
+  Object.keys(groups).forEach(gid => {
+    const peerCount = Object.keys(groups[gid].peers || {}).length;
+    if (peerCount > 0) {
+      console.log(`[CONVO] Group ${gid} active with ${peerCount} peers.`);
+    }
+  });
+});
+
+db.ref('signaling').on('value', (snapshot) => {
+  const val = snapshot.val();
+  if (val) {
+    const targets = Object.keys(val).length;
+    // console.log(`[P2P] Signaling node status: ${targets} targets active.`);
+  }
+});
+
+db.ref('signaling').on('child_added', (snapshot) => {
+  const targetUid = snapshot.key;
+  // Listen to each peer's signaling queue under this target
+  snapshot.ref.on('child_added', (peerSnapshot) => {
+    const senderUid = peerSnapshot.key;
+    // Listen to individual pushed messages in the queue
+    peerSnapshot.ref.on('child_added', (msgSnapshot) => {
+      const data = msgSnapshot.val();
+      const type = data.offer ? 'OFFER' : (data.answer ? 'ANSWER' : (data.ice ? 'ICE' : 'DATA'));
+      console.log(`[P2P] HANDSHAKE: ${senderUid.substring(0, 6)} -> ${targetUid.substring(0, 6)} [${type}]`);
+    });
+  });
+});
+
+db.ref('invitations').on('child_added', (snapshot) => {
+  const targetUid = snapshot.key;
+  snapshot.ref.on('child_added', (innerSnapshot) => {
+    const senderUid = innerSnapshot.key;
+    console.log(`[P2P] INVITE: ${senderUid.substring(0, 6)} -> ${targetUid.substring(0, 6)}`);
+  });
+});
+// ---------------------------------------------------------
+
 io.on('connection', (socket) => {
   console.log(`Socket Debug Connection: ${socket.id}`);
 });

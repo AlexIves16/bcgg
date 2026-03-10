@@ -5,11 +5,17 @@ import '../network/webrtc_manager.dart';
 class ChatScreen extends StatefulWidget {
   final String groupId;
   final String groupName;
+  final bool isLocalMesh;
+  final double? lat;
+  final double? lng;
 
   const ChatScreen({
     super.key,
     required this.groupId,
     this.groupName = 'Group Chat',
+    this.isLocalMesh = false,
+    this.lat,
+    this.lng,
   });
 
   @override
@@ -32,7 +38,11 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _initChat() {
-    WebRtcManager().joinGroup(widget.groupId);
+    if (widget.isLocalMesh && widget.lat != null && widget.lng != null) {
+      WebRtcManager().joinLocalMesh(widget.lat!, widget.lng!);
+    } else {
+      WebRtcManager().joinGroup(widget.groupId);
+    }
     
     _msgSub = WebRtcManager().messageStream.listen((msg) {
       if (mounted) {
@@ -98,6 +108,11 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.person_add_alt_1),
+            tooltip: 'Invite Friends',
+            onPressed: () => _inviteMoreFriends(),
+          ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: () => _showStatusDialog(),
@@ -192,6 +207,39 @@ class _ChatScreenState extends State<ChatScreen> {
               onPressed: _sendMessage,
               backgroundColor: Colors.cyanAccent,
               child: const Icon(Icons.send, color: Colors.black, size: 20),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _inviteMoreFriends() {
+    // Show a dialog to pick a friend to invite to this specific groupId
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1a1a2e),
+      builder: (context) => Container(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('Invite Friends to P2P Session', style: TextStyle(color: Colors.white, fontSize: 18)),
+            const Divider(color: Colors.white24),
+            // We can reuse a list of online friends or just a simple input
+            const Text('Feature coming soon: Picker list', style: TextStyle(color: Colors.white60)),
+            const SizedBox(height: 16),
+            TextField(
+              decoration: const InputDecoration(
+                hintText: 'Friend Email',
+                hintStyle: TextStyle(color: Colors.white30),
+              ),
+              style: const TextStyle(color: Colors.white),
+              onSubmitted: (email) {
+                // In a real app, we'd lookup the UID. For now, we assume simple email or UID input
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Inviting...')));
+              },
             ),
           ],
         ),

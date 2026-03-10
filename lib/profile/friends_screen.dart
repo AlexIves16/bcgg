@@ -17,6 +17,56 @@ class FriendsScreen extends StatefulWidget {
 
 class _FriendsScreenState extends State<FriendsScreen> {
   final User? currentUser = FirebaseAuth.instance.currentUser;
+  StreamSubscription? _inviteSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _listenForInvites();
+  }
+
+  void _listenForInvites() {
+    _inviteSub = WebRtcManager().invitationStream.listen((invite) {
+      if (!mounted) return;
+      _showInviteDialog(invite['senderUid'], invite['groupId'], invite['groupName']);
+    });
+  }
+
+  void _showInviteDialog(String senderUid, String groupId, String groupName) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1a1a2e),
+        title: const Text('P2P Chat Invite', style: TextStyle(color: Colors.white)),
+        content: Text('Friend $senderUid invites you to join "$groupName"', style: const TextStyle(color: Colors.white70)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Decline', style: TextStyle(color: Colors.redAccent)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChatScreen(groupId: groupId, groupName: groupName),
+                ),
+              );
+            },
+            child: const Text('Join'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _inviteSub?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -31,6 +81,26 @@ class _FriendsScreenState extends State<FriendsScreen> {
       appBar: AppBar(
         title: const Text('My Friends'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.radar),
+            tooltip: 'Join Nearby Mesh',
+            onPressed: () async {
+              final pos = await LocationManager().getCurrentPosition();
+              if (!mounted) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => ChatScreen(
+                    groupId: 'local_mesh', // Logic handled in ChatScreen init or WebRtcManager
+                    groupName: 'Nearby Mesh (300m)',
+                    isLocalMesh: true,
+                    lat: pos.latitude,
+                    lng: pos.longitude,
+                  ),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.groups_outlined),
             tooltip: 'Join Global Chat',
@@ -196,11 +266,20 @@ class _FriendListTileState extends State<FriendListTile> {
 
   void _updateFriendData(List<dynamic> players) {
     try {
-      _friendActiveData = players.firstWhere(
+      final found = players.firstWhere(
         (p) => p['uid'] == widget.friendUid,
         orElse: () => null,
       );
-    } catch (_) {
+      
+      if (found != null) {
+        _friendActiveData = Map<String, dynamic>.from(found as Map);
+        // debugPrint('[FRIENDS] Found friend ${widget.friendEmail} online! UID: ${widget.friendUid}');
+      } else {
+        _friendActiveData = null;
+        // debugPrint('[FRIENDS] Friend ${widget.friendEmail} (UID: ${widget.friendUid}) is not in players list.');
+      }
+    } catch (e) {
+      debugPrint('[FRIENDS] Error updating friend data: $e');
       _friendActiveData = null;
     }
   }
@@ -215,18 +294,21 @@ class _FriendListTileState extends State<FriendListTile> {
 
   @override
   Widget build(BuildContext context) {
-    String proximity = "";
-    if (widget.status == 'friends' && _isOnline) {
-      if (_currentPosition != null) {
-        double distance = Geolocator.distanceBetween(
-          _currentPosition!.latitude,
-          _currentPosition!.longitude,
-          _friendActiveData!['lat'] ?? 0.0,
-          _friendActiveData!['lng'] ?? 0.0,
-        );
-        proximity = " • ${distance.toInt()}m away";
-      } else {
-        proximity = " • Online";
+    String proximityText = "";
+    if (_isOnline && widget.status == 'friends') {
+      proximityText = " • Online";
+      if (_currentPosition != null && _friendActiveData!['lat'] != null && _friendActiveData!['lng'] != null) {
+        try {
+          double distance = Geolocator.distanceBetween(
+            _currentPosition!.latitude,
+            _currentPosition!.longitude,
+            (_friendActiveData!['lat'] as num).toDouble(),
+            (_friendActiveData!['lng'] as num).toDouble(),
+          );
+          proximityText = " • ${distance.toInt()}m away";
+        } catch (e) {
+          debugPrint('[FRIENDS] Distance calc error: $e');
+        }
       }
     }
 
@@ -254,7 +336,7 @@ class _FriendListTileState extends State<FriendListTile> {
         ],
       ),
       title: Text(widget.friendEmail, style: const TextStyle(fontWeight: FontWeight.bold)),
-      subtitle: Text('Status: ${widget.status.replaceAll('_', ' ')}$proximity'),
+      subtitle: Text('Status: ${widget.status.replaceAll('_', ' ')}$proximityText'),
       trailing: _buildTrailing(),
     );
   }
@@ -274,6 +356,28 @@ class _FriendListTileState extends State<FriendListTile> {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          if (_isOnline)
+            IconButton(
+              icon: const Icon(Icons.add_comment_outlined, color: Colors.greenAccent, size: 20),
+              tooltip: 'Invite to P2P',
+              onPressed: () {
+                final myUid = FirebaseAuth.instance.currentUser?.uid;
+                if (myUid == null) return;
+                // Create a dynamic group ID
+                final groupId = 'p2p_group_${DateTime.now().millisecondsSinceEpoch}';
+                WebRtcManager().sendInvite(widget.friendUid, groupId, 'Private Chat');
+                
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => ChatScreen(
+                      groupId: groupId,
+                      groupName: 'Private Chat',
+                    ),
+                  ),
+                );
+              },
+            ),
           IconButton(
             icon: const Icon(Icons.chat_bubble_outline, color: Colors.cyanAccent, size: 20),
             onPressed: () {

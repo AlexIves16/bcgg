@@ -47,14 +47,18 @@ class WebRtcManager {
   String? _currentGroupId;
   StreamSubscription? _peersSubscription;
   StreamSubscription? _signalingSubscription;
+  StreamSubscription? _groupSubscription;
+  StreamSubscription? _inviteSubscription;
 
-  // Stream for UI to listen for incoming messages
+  // --- Streams ---
   final _messageController = StreamController<GroupMessage>.broadcast();
   Stream<GroupMessage> get messageStream => _messageController.stream;
 
-  // Stream for UI to track connection status
   final _connectionController = StreamController<Map<String, bool>>.broadcast();
   Stream<Map<String, bool>> get connectionStream => _connectionController.stream;
+
+  final _invitationController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get invitationStream => _invitationController.stream;
 
   final Map<String, dynamic> _configuration = {
     'iceServers': [
@@ -76,7 +80,10 @@ class WebRtcManager {
 
     debugPrint('[WebRTC] Joining group: $groupId');
 
-    // 1. Register myself in the group
+    // 1. Register myself in the group & clear old signaling
+    await _db.child('signaling/$myUid').remove(); 
+    debugPrint('[WebRTC] Cleared stale signaling for $myUid');
+
     await _db.child('groups/$groupId/peers/$myUid').set({
       'joinedAt': ServerValue.timestamp,
       'name': auth.currentUser?.displayName ?? auth.currentUser?.email?.split('@')[0] ?? 'Explorer',
@@ -90,29 +97,79 @@ class WebRtcManager {
       peers.forEach((peerUid, data) {
         if (peerUid == myUid) return;
         
+        debugPrint('[WebRTC] Peer discovered in group: $peerUid');
+
         // If we don't have a connection, initiate one if we are the "initiator"
         // Rule: Higher UID initiates to lower UID for determinism
         if (!_peerConnections.containsKey(peerUid)) {
           if (myUid.compareTo(peerUid) > 0) {
+            debugPrint('[WebRTC] I am initiator for $peerUid. Starting connection...');
             _createPeerConnection(peerUid, true);
+          } else {
+            debugPrint('[WebRTC] Waiting for $peerUid to initiate...');
           }
         }
       });
     });
 
     // 3. Listen for incoming signaling messages (offers, answers, ice)
-    _signalingSubscription = _db.child('signaling/$myUid').onChildAdded.listen((event) {
-      final peerUid = event.snapshot.key; // Who sent this
+    // We listen to the shared signaling node where others push messages for ME
+    _signalingSubscription = _db.child('signaling/$myUid').onChildAdded.listen((peerEvent) {
+      final peerUid = peerEvent.snapshot.key;
       if (peerUid == null) return;
 
+      // Now listen to the messages PUSHED by this specific peer
+      _db.child('signaling/$myUid/$peerUid').onChildAdded.listen((msgEvent) {
+        final data = msgEvent.snapshot.value as Map?;
+        if (data == null) return;
+
+        debugPrint('[WebRTC] Processing signaling from $peerUid: ${data.keys.first}');
+        _handleSignalingData(peerUid, data);
+        
+        // Clear this specific message after processing
+        msgEvent.snapshot.ref.remove();
+      });
+    });
+
+    // 4. Listen for Invitations
+    _inviteSubscription?.cancel();
+    _inviteSubscription = _db.child('invitations/$myUid').onChildAdded.listen((event) {
       final data = event.snapshot.value as Map?;
       if (data == null) return;
-
-      _handleSignalingData(peerUid, data);
       
-      // Clear processed signaling
-      _db.child('signaling/$myUid/$peerUid').remove();
+      debugPrint('[WebRTC] Received INVITATION from ${event.snapshot.key}');
+      _invitationController.add({
+        'senderUid': event.snapshot.key,
+        'groupId': data['groupId'],
+        'groupName': data['groupName'],
+      });
+      
+      // Auto-clear after reporting to UI
+      event.snapshot.ref.remove();
     });
+  }
+
+  Future<void> sendInvite(String targetUid, String groupId, String groupName) async {
+    final myUid = auth.currentUser?.uid;
+    if (myUid == null) return;
+
+    debugPrint('[WebRTC] Sending invite to $targetUid for group $groupId');
+    await _db.child('invitations/$targetUid/$myUid').set({
+      'groupId': groupId,
+      'groupName': groupName,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  /// Groups players by a grid (roughly 500m) to allow discovery within ~300m radius
+  Future<void> joinLocalMesh(double lat, double lng) async {
+    // 0.005 degrees is ~500m
+    final gridLat = (lat / 0.005).floor();
+    final gridLng = (lng / 0.005).floor();
+    final localGroupId = 'local_mesh_${gridLat}_${gridLng}';
+    
+    debugPrint('[WebRTC] Joining Local Mesh: $localGroupId (Lat: $lat, Lng: $lng)');
+    await joinGroup(localGroupId);
   }
 
   Future<void> _createPeerConnection(String peerUid, bool isInitiator) async {
@@ -173,6 +230,7 @@ class WebRtcManager {
     final pc = _peerConnections[peerUid]!;
 
     if (data.containsKey('offer')) {
+      debugPrint('[WebRTC] Received OFFER from $peerUid');
       final offerMap = Map<String, dynamic>.from(data['offer']);
       await pc.setRemoteDescription(RTCSessionDescription(offerMap['sdp'], offerMap['type']));
       
@@ -180,9 +238,11 @@ class WebRtcManager {
       await pc.setLocalDescription(answer);
       _sendSignaling(peerUid, {'answer': answer.toMap()});
     } else if (data.containsKey('answer')) {
+      debugPrint('[WebRTC] Received ANSWER from $peerUid');
       final answerMap = Map<String, dynamic>.from(data['answer']);
       await pc.setRemoteDescription(RTCSessionDescription(answerMap['sdp'], answerMap['type']));
     } else if (data.containsKey('ice')) {
+      debugPrint('[WebRTC] Received ICE CANDIDATE from $peerUid');
       final iceMap = Map<String, dynamic>.from(data['ice']);
       await pc.addCandidate(RTCIceCandidate(iceMap['candidate'], iceMap['sdpMid'], iceMap['sdpMLineIndex']));
     }
@@ -191,7 +251,8 @@ class WebRtcManager {
   void _sendSignaling(String peerUid, Map<String, dynamic> data) {
     final myUid = auth.currentUser?.uid;
     if (myUid == null) return;
-    _db.child('signaling/$peerUid/$myUid').update(data);
+    debugPrint('[WebRTC] Pushing signaling to $peerUid: ${data.keys.first}');
+    _db.child('signaling/$peerUid/$myUid').push().set(data);
   }
 
   void _updateConnectionStatus() {
@@ -226,13 +287,20 @@ class WebRtcManager {
   }
 
   Future<void> leaveGroup() async {
-    final myUid = auth.currentUser?.uid;
-    if (myUid != null && _currentGroupId != null) {
-      await _db.child('groups/$_currentGroupId/peers/$myUid').remove();
-    }
-
     _peersSubscription?.cancel();
     _signalingSubscription?.cancel();
+    _inviteSubscription?.cancel();
+    _groupSubscription?.cancel();
+    
+    final myUid = auth.currentUser?.uid;
+    if (myUid == null) return;
+
+    if (_currentGroupId != null) {
+      debugPrint('[WebRTC] Leaving group: $_currentGroupId');
+      await _db.child('groups/$_currentGroupId/peers/$myUid').remove();
+    }
+    
+    _currentGroupId = null;
     
     for (var dc in _dataChannels.values) {
       await dc.close();
