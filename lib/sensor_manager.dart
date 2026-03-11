@@ -26,7 +26,11 @@ class SensorManager {
   int get userEnergy => _energy;
   
   // Realtime Database reference
-  final DatabaseReference _dbRef = FirebaseDatabase.instance.ref();
+  static const _rtdbUrl = 'https://game26-base-default-rtdb.europe-west1.firebasedatabase.app';
+  final DatabaseReference _dbRef = FirebaseDatabase.instanceFor(
+    app: FirebaseAuth.instance.app,
+    databaseURL: _rtdbUrl,
+  ).ref();
   SharedPreferences? _prefs;
 
   Future<void> init() async {

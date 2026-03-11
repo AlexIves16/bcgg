@@ -41,7 +41,11 @@ class WebRtcManager {
   final Map<String, RTCPeerConnection> _peerConnections = {};
   final Map<String, RTCDataChannel> _dataChannels = {};
   
-  final _db = FirebaseDatabase.instance.ref();
+  static const _rtdbUrl = 'https://game26-base-default-rtdb.europe-west1.firebasedatabase.app';
+  final _db = FirebaseDatabase.instanceFor(
+    app: FirebaseAuth.instance.app,
+    databaseURL: _rtdbUrl,
+  ).ref();
   final auth = FirebaseAuth.instance;
   
   String? _currentGroupId;
