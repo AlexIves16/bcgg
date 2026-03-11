@@ -143,7 +143,7 @@ class _ChatScreenState extends State<ChatScreen> {
                 },
               ),
             ),
-            _buildInputArea(),
+            _buildInputArea(onlinePeers),
           ],
         ),
       ),
@@ -178,7 +178,7 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  Widget _buildInputArea() {
+  Widget _buildInputArea(int onlinePeers) {
     return Container(
       padding: const EdgeInsets.all(12),
       color: Colors.black26,
