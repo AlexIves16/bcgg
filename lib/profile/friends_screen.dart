@@ -364,8 +364,10 @@ class _FriendListTileState extends State<FriendListTile> {
               onPressed: () {
                 final myUid = FirebaseAuth.instance.currentUser?.uid;
                 if (myUid == null) return;
-                // Create a dynamic group ID
-                final groupId = 'p2p_group_${DateTime.now().millisecondsSinceEpoch}';
+                // Use a DETERMINISTIC group ID for 1-to-1 P2P invitation to avoid split-brain
+                final uids = [myUid, widget.friendUid]..sort();
+                final groupId = 'p2p_invite_${uids[0]}_${uids[1]}';
+                
                 WebRtcManager().sendInvite(widget.friendUid, groupId, 'Private Chat');
                 
                 Navigator.push(

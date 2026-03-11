@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../network/webrtc_manager.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -189,8 +190,9 @@ class _ChatScreenState extends State<ChatScreen> {
                 controller: _msgController,
                 style: const TextStyle(color: Colors.white),
                 decoration: InputDecoration(
-                  hintText: 'Direct P2P Message...',
+                  hintText: onlinePeers > 0 ? 'Direct P2P Message...' : 'Connecting to P2P Mesh...',
                   hintStyle: const TextStyle(color: Colors.white38),
+                  enabled: onlinePeers > 0,
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(25),
                     borderSide: BorderSide.none,
@@ -204,9 +206,13 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             const SizedBox(width: 8),
             FloatingActionButton.small(
-              onPressed: _sendMessage,
-              backgroundColor: Colors.cyanAccent,
-              child: const Icon(Icons.send, color: Colors.black, size: 20),
+              onPressed: onlinePeers > 0 ? _sendMessage : null,
+              backgroundColor: onlinePeers > 0 ? Colors.cyanAccent : Colors.grey,
+              child: Icon(
+                onlinePeers > 0 ? Icons.send : Icons.sync,
+                color: Colors.black, 
+                size: 20
+              ),
             ),
           ],
         ),

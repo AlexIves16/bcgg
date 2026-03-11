@@ -102,21 +102,24 @@ class WebRtcManager {
     // 2. Listen for other peers in the group
     _peersSubscription = _db.child('groups/$groupId/peers').onValue.listen((event) {
       final peers = event.snapshot.value as Map?;
-      if (peers == null) return;
+      if (peers == null) {
+        debugPrint('[WebRTC] No peers in group $groupId');
+        return;
+      }
+
+      debugPrint('[WebRTC] Peers update in group: ${peers.keys.toList()}');
 
       peers.forEach((peerUid, data) {
         if (peerUid == myUid) return;
         
-        debugPrint('[WebRTC] Peer discovered in group: $peerUid');
-
         // If we don't have a connection, initiate one if we are the "initiator"
-        // Rule: Higher UID initiates to lower UID for determinism
         if (!_peerConnections.containsKey(peerUid)) {
+          // Rule: Higher UID initiates to lower UID for determinism
           if (myUid.compareTo(peerUid) > 0) {
-            debugPrint('[WebRTC] I am initiator for $peerUid. Starting connection...');
+            debugPrint('[WebRTC] I ($myUid) am initiator for $peerUid. Starting connection...');
             _createPeerConnection(peerUid, true);
           } else {
-            debugPrint('[WebRTC] Waiting for $peerUid to initiate...');
+            debugPrint('[WebRTC] I ($myUid) wait for $peerUid to initiate...');
           }
         }
       });
@@ -124,21 +127,32 @@ class WebRtcManager {
 
     // 3. Listen for incoming signaling messages (offers, answers, ice)
     // We listen to the shared signaling node where others push messages for ME
+    final List<StreamSubscription> _innerSubscriptions = [];
     _signalingSubscription = _db.child('signaling/$myUid').onChildAdded.listen((peerEvent) {
       final peerUid = peerEvent.snapshot.key;
       if (peerUid == null) return;
 
+      debugPrint('[WebRTC] Found signaling folder from peer: $peerUid');
+
       // Now listen to the messages PUSHED by this specific peer
-      _db.child('signaling/$myUid/$peerUid').onChildAdded.listen((msgEvent) {
+      var sub = _db.child('signaling/$myUid/$peerUid').onChildAdded.listen((msgEvent) {
         final data = msgEvent.snapshot.value as Map?;
         if (data == null) return;
 
-        debugPrint('[WebRTC] Processing signaling from $peerUid: ${data.keys.first}');
+        debugPrint('[WebRTC] Incoming signal from $peerUid: ${data.keys.first}');
         _handleSignalingData(peerUid, data);
         
-        // Clear this specific message after processing
+        // Clear this specific message AFTER processing
         msgEvent.snapshot.ref.remove();
       });
+      _innerSubscriptions.add(sub);
+    });
+
+    // Store inner subs to cancel them later
+    _peersSubscription?.onDone(() {
+      for (var s in _innerSubscriptions) {
+        s.cancel();
+      }
     });
 
     // 4. Listen for Invitations
