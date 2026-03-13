@@ -33,13 +33,28 @@ class UpdateManager {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        // tag_name can be "v25" or "0.25"
-        final tagName = data['tag_name'] as String? ?? '0';
+        // tag_name can be "v0.37" or "0.37"
+        final tagName = data['tag_name'] as String? ?? '0.0.0';
         
-        // Extract the last numeric part (e.g., "0.25" -> "25", "v25" -> "25")
-        final String numericPart = tagName.split('.').last.replaceAll(RegExp(r'[^0-9]'), '');
-        final serverVersion = int.tryParse(numericPart) ?? 0;
-
+        // Parse version properly - extract numbers from tag
+        final String cleanTag = tagName.replaceAll('v', '').trim();
+        
+        // Split by dots and convert to comparable integer
+        // e.g., "0.3.7" -> [0, 3, 7] -> 0*10000 + 3*100 + 7 = 307
+        final List<String> serverVersionParts = cleanTag.split('.');
+        int serverVersionComparable = 0;
+        for (int i = 0; i < serverVersionParts.length && i < 3; i++) {
+          final part = int.tryParse(serverVersionParts[i].replaceAll(RegExp(r'[^0-9]'), '')) ?? 0;
+          serverVersionComparable += part * (i == 0 ? 10000 : (i == 1 ? 100 : 1));
+        }
+        
+        // Current version: 0.3.7+37 -> build number is 37
+        // We compare build numbers primarily
+        final int currentBuildNumber = currentBuild;
+        
+        // Extract build number from tag (last part)
+        final int serverBuildNumber = int.tryParse(serverVersionParts.last) ?? 0;
+        
         // Find the APK asset download URL
         final assets = (data['assets'] as List?)?.cast<Map<String, dynamic>>();
         final apkAsset = assets?.firstWhere(
@@ -47,11 +62,13 @@ class UpdateManager {
           orElse: () => <String, dynamic>{},
         );
         final downloadUrl = apkAsset?['browser_download_url'] as String? ?? '';
-
-        debugPrint('[Update] Current: $currentBuild, Server: $serverVersion');
-        if (serverVersion > currentBuild && downloadUrl.isNotEmpty) {
+        
+        debugPrint('[Update] Current build: $currentBuildNumber, Server build: $serverBuildNumber (tag: $tagName)');
+        
+        // Only update if server build number is greater
+        if (serverBuildNumber > currentBuildNumber && downloadUrl.isNotEmpty) {
           if (context.mounted) {
-            _showUpdateDialog(context, serverVersion, downloadUrl);
+            _showUpdateDialog(context, serverBuildNumber, downloadUrl);
           }
         }
       }
