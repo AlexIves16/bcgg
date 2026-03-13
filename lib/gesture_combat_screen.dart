@@ -15,27 +15,108 @@ class GestureCombatScreen extends StatefulWidget {
 }
 
 class _GestureCombatScreenState extends State<GestureCombatScreen> {
+  bool _isDodging = false;
+  DateTime? _lastDodgeTime;
+  String? _incomingAttackWarning;
+
+  // Combat State
   int _timeLeft = 15;
+  int _playerHp = 100;
+  int _maxPlayerHp = 100;
+  List<String> _sequence = [];
+  int _currentSequenceIndex = 0;
   Timer? _timer;
-  
+  Timer? _combatTickTimer;
+
+  // Drawing/Gyro State
   bool _isDrawing = false;
-  List<Offset> _points = [];
-  StreamSubscription<GyroscopeEvent>? _gyroSubscription;
-  
-  // Smoothing and position tracking
+  final List<Offset> _points = [];
   double _px = 0, _py = 0;
   double _filteredX = 0, _filteredY = 0;
-  
-  // Base calibration values (tuned by user)
-  final double _alpha = 1.0; // 1.0 = Pure raw sensor data, no smoothing delay
-  final double _deadzone = 0.5;
-  final double _scale = 20.0;
+  final double _alpha = 0.2;
+  final double _deadzone = 0.1;
+  final double _scale = 300.0;
+  StreamSubscription? _gyroSubscription;
+
+  void _stopSensors() {
+    _gyroSubscription?.cancel();
+  }
 
   @override
   void initState() {
     super.initState();
     _timeLeft = widget.monster['timeLimit'] ?? 15;
+    _playerHp = SensorManager().userHp;
+    _maxPlayerHp = SensorManager().maxHp;
+    _sequence = widget.monster['combatSequence'] ?? [widget.monster['requiredShape']];
+    
     _startTimer();
+    _startCombatLoop();
+    _startAccelerometerMonitor();
+  }
+
+  void _startAccelerometerMonitor() {
+    userAccelerometerEvents.listen((UserAccelerometerEvent event) {
+      if (!mounted) return;
+      // Detect a sharp movement (shake)
+      if (event.x.abs() > 15 || event.y.abs() > 15 || event.z.abs() > 15) {
+        if (_lastDodgeTime == null || DateTime.now().difference(_lastDodgeTime!) > const Duration(seconds: 1)) {
+          _performDodge();
+        }
+      }
+    });
+  }
+
+  void _performDodge() {
+    setState(() {
+      _isDodging = true;
+      _lastDodgeTime = DateTime.now();
+      _incomingAttackWarning = null; // Clear warning on dodge
+    });
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() => _isDodging = false);
+    });
+  }
+
+  void _startCombatLoop() {
+    _combatTickTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (!mounted) return;
+      
+      // 1. Aura Damage (Always hits, but reduced if dodging?)
+      if (widget.monster['attackType'] == 'proximity_aura') {
+        _takeDamage(_isDodging ? 1 : 2);
+      }
+
+      // 2. Scheduled Attacks
+      final int interval = widget.monster['attackInterval'] ?? 3000;
+      final int tickMs = timer.tick * 500;
+      
+      // Warning 1 second before attack
+      if ((tickMs + 1000) % interval == 0) {
+        setState(() => _incomingAttackWarning = "MONSTER ATTACKING!");
+      }
+
+      if (tickMs % interval == 0) {
+        if (!_isDodging) {
+          _takeDamage(widget.monster['attackPower'] ?? 10);
+        } else {
+          setState(() => _incomingAttackWarning = "DODGED!");
+          Future.delayed(const Duration(seconds: 1), () {
+            if (mounted) setState(() => _incomingAttackWarning = null);
+          });
+        }
+      }
+    });
+  }
+
+  void _takeDamage(int amount) {
+    setState(() {
+      _playerHp = (_playerHp - amount).clamp(0, _maxPlayerHp);
+      if (_playerHp <= 0) {
+        _failCombat('You were defeated!');
+      }
+    });
+    SensorManager().takeDamage(amount);
   }
 
   void _startTimer() {
@@ -45,25 +126,38 @@ class _GestureCombatScreenState extends State<GestureCombatScreen> {
         if (_timeLeft > 0) {
           _timeLeft--;
         } else {
-          _failCombat();
+          _failCombat('Time is up! The monster escaped!');
         }
       });
     });
   }
 
-  void _failCombat() {
+  void _failCombat(String message) {
     _timer?.cancel();
+    _combatTickTimer?.cancel();
     _stopSensors();
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Time is up! The monster escaped!'), backgroundColor: Colors.orange),
+        SnackBar(content: Text(message), backgroundColor: Colors.orange),
       );
       Navigator.of(context).pop(); // Return to map
     }
   }
 
   void _winCombat() {
+    if (_currentSequenceIndex < _sequence.length - 1) {
+      setState(() {
+        _currentSequenceIndex++;
+        _points.clear();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Next shape: ${_sequence[_currentSequenceIndex]}!'), duration: const Duration(milliseconds: 800)),
+      );
+      return;
+    }
+
     _timer?.cancel();
+    _combatTickTimer?.cancel();
     _stopSensors();
     NetworkManager().killMonster(widget.monster['id']);
     NetworkManager().logActivity('kill_monster', 50);
@@ -71,13 +165,14 @@ class _GestureCombatScreenState extends State<GestureCombatScreen> {
     
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('You drew a ${widget.monster['requiredShape']}! +50 XP'), backgroundColor: Colors.green),
+        SnackBar(content: Text('Victory! Monster defeated! +50 XP'), backgroundColor: Colors.green),
       );
       Navigator.of(context).pop(); // Return to map
     }
   }
 
   void _startDrawing() {
+    // SAME as before
     setState(() {
       _isDrawing = true;
       _points.clear();
@@ -86,19 +181,14 @@ class _GestureCombatScreenState extends State<GestureCombatScreen> {
     });
 
     _gyroSubscription = gyroscopeEventStream().listen((GyroscopeEvent event) {
-      // 1. ПРИМЕНЯЕМ LOW-PASS FILTER (Сглаживание шума)
-      // Rot X (pitch) moves phone Up/Down (Y axis on screen)
-      // Rot Y (yaw) moves phone Left/Right (X axis on screen, inverted)
       _filteredX = _alpha * (-event.y) + (1 - _alpha) * _filteredX;
       _filteredY = _alpha * (-event.x) + (1 - _alpha) * _filteredY;
 
-      // 2. Игнорируем микро-движения (мертвая зона)
       double dx = _filteredX;
       double dy = _filteredY;
       if (dx.abs() < _deadzone) dx = 0;
       if (dy.abs() < _deadzone) dy = 0;
 
-      // 3. ОБНОВЛЯЕМ ПОЗИЦИЮ (интеграция вращения в перемещение кисти)
       _px += dx * _scale;
       _py += dy * _scale;
       
@@ -111,47 +201,27 @@ class _GestureCombatScreenState extends State<GestureCombatScreen> {
   }
 
   void _stopDrawing() {
-    _stopSensors();
+    _gyroSubscription?.cancel();
     setState(() {
       _isDrawing = false;
     });
     _analyzeShape();
   }
 
-  void _stopSensors() {
-    _gyroSubscription?.cancel();
-  }
-
   void _analyzeShape() {
-    if (_points.length < 20) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Drawing too short! Try again.')),
-      );
-      return;
-    }
+    if (_points.length < 20) return;
 
-    String requiredShape = widget.monster['requiredShape'];
-
+    String requiredShape = _sequence[_currentSequenceIndex];
     double bestScore = GestureRecognizer.traceScore(_points, requiredShape, 120.0);
     
-    // Check Result
-    bool success = (bestScore > 0.6); // 60% match threshold
-    
-    if (success) {
+    if (bestScore > 0.6) {
       _winCombat();
     } else {
       if (mounted) {
-        String msg = 'Match: ${(bestScore * 100).toStringAsFixed(1)}%. Trace the $requiredShape closer!';
-
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(msg), 
-            backgroundColor: Colors.red
-          ),
+          SnackBar(content: Text('Keep tracing the $requiredShape!'), duration: const Duration(seconds: 1)),
         );
-        setState(() {
-           _points.clear();
-        });
+        setState(() => _points.clear());
       }
     }
   }
@@ -159,101 +229,122 @@ class _GestureCombatScreenState extends State<GestureCombatScreen> {
   @override
   void dispose() {
     _timer?.cancel();
+    _combatTickTimer?.cancel();
     _stopSensors();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    String shape = widget.monster['requiredShape'] ?? 'unknown';
-    IconData shapeIcon = Icons.help_outline;
-    if (shape == 'circle') shapeIcon = Icons.circle_outlined;
-    if (shape == 'square') shapeIcon = Icons.crop_square;
-    if (shape == 'triangle') shapeIcon = Icons.change_history;
+    String shape = _sequence[_currentSequenceIndex];
+    IconData shapeIcon = shape == 'circle' ? Icons.circle_outlined : (shape == 'square' ? Icons.crop_square : Icons.change_history);
 
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Combat!'),
-        backgroundColor: Colors.red[900],
-        automaticallyImplyLeading: false, // Prevent simple back button escape
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Monster: ${widget.monster['type']}', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    Text('HP: ${widget.monster['hp']}', style: const TextStyle(fontSize: 16)),
-                  ],
-                ),
-                Text('$_timeLeft s', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.orange)),
-              ],
-            ),
-          ),
-          const Divider(),
-          const SizedBox(height: 20),
-          const Text('Draw this shape with your phone:', style: TextStyle(fontSize: 18)),
-          const SizedBox(height: 10),
-          Icon(shapeIcon, size: 80, color: Colors.white),
-          const SizedBox(height: 20),
-          
-          // Drawing Canvas
-          Expanded(
-            child: Container(
-              margin: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white30),
-                color: Colors.black26,
-                borderRadius: BorderRadius.circular(16)
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: CustomPaint(
-                  painter: TrajectoryPainter(
-                    points: _points, 
-                    templateShape: widget.monster['requiredShape'] ?? 'circle',
-                    radius: 120.0
+      backgroundColor: Colors.black,
+      body: SafeArea(
+        child: Column(
+          children: [
+            // Monster Info & Player HP
+            Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                   Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('$_timeLeft s', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.orange)),
+                      Text('Seq: ${_currentSequenceIndex + 1}/${_sequence.length}', style: const TextStyle(color: Colors.white70)),
+                    ],
                   ),
-                  size: Size.infinite,
-                ),
+                  const SizedBox(height: 8),
+                  // Monster HP Bar
+                  const LinearProgressIndicator(value: 1.0, color: Colors.red, backgroundColor: Colors.white10, minHeight: 8),
+                  const SizedBox(height: 12),
+                  // Player HP Bar
+                  Row(
+                    children: [
+                      const Icon(Icons.favorite, color: Colors.greenAccent, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: _playerHp / _maxPlayerHp,
+                            minHeight: 12,
+                            color: Colors.greenAccent,
+                            backgroundColor: Colors.white10,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
-          ),
-          
-          Padding(
-            padding: const EdgeInsets.all(24.0),
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapDown: (_) => _startDrawing(),
-              onTapUp: (_) => _stopDrawing(),
-              onTapCancel: () => _stopDrawing(),
-              child: AnimatedContainer(
-                duration: const Duration(milliseconds: 150),
-                width: 240,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: _isDrawing ? Colors.redAccent : Colors.blueAccent,
-                  borderRadius: BorderRadius.circular(40),
-                  boxShadow: [
-                    if (!_isDrawing)
-                       BoxShadow(color: Colors.blueAccent.withOpacity(0.5), blurRadius: 10, spreadRadius: 2)
-                  ]
-                ),
-                child: Center(
-                  child: Text(
-                    _isDrawing ? 'DRAWING...' : 'HOLD TO DRAW',
-                    style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            
+            Expanded(
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  CustomPaint(
+                    painter: TrajectoryPainter(
+                      points: _points, 
+                      templateShape: shape,
+                      radius: 120.0
+                    ),
+                    size: Size.infinite,
+                  ),
+                  Positioned(
+                    top: 40,
+                    child: Column(
+                      children: [
+                        Text(widget.monster['name'] ?? 'Monster', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white)),
+                        Text('RANK: ${widget.monster['rank']?.toString().toUpperCase()}', style: const TextStyle(color: Colors.orangeAccent)),
+                        if (_incomingAttackWarning != null)
+                          Container(
+                            margin: const EdgeInsets.only(top: 10),
+                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                            decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(8)),
+                            child: Text(_incomingAttackWarning!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (_isDodging)
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.blueAccent, width: 4),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: const Center(child: Text('DODGING!', style: TextStyle(color: Colors.blueAccent, fontSize: 40, fontWeight: FontWeight.bold))),
+                    ),
+                  Icon(shapeIcon, size: 100, color: Colors.white10),
+                ],
+              ),
+            ),
+
+            Padding(
+              padding: const EdgeInsets.all(32.0),
+              child: GestureDetector(
+                onLongPressStart: (_) => _startDrawing(),
+                onLongPressEnd: (_) => _stopDrawing(),
+                child: Container(
+                  width: double.infinity,
+                  height: 80,
+                  decoration: BoxDecoration(
+                    color: _isDrawing ? Colors.redAccent.withOpacity(0.8) : Colors.blueAccent.withOpacity(0.3),
+                    borderRadius: BorderRadius.circular(40),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: Center(
+                    child: Text(_isDrawing ? 'TRACING...' : 'HOLD TO START TRACING', 
+                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

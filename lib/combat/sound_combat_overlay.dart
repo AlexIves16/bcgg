@@ -5,9 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../audio/audio_analyzer.dart';
 import '../profile/voice_calibration_screen.dart';
+import '../sensor_manager.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 
 class SoundCombatOverlay extends StatefulWidget {
-  final Map<String, dynamic> monster;
+  final dynamic monster;
   final VoidCallback onWin;
   final VoidCallback onLose;
 
@@ -24,7 +26,7 @@ class SoundCombatOverlay extends StatefulWidget {
 
 class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
   final AudioAnalyzer _analyzer = AudioAnalyzer();
-  Map<String, dynamic>? _fingerprint;
+  dynamic _fingerprint;
   bool _isLoading = true;
   bool _needsCalibration = false;
   
@@ -36,21 +38,65 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
   bool _isMatching = false;
   String _feedback = "Prepare to sing...";
 
+  // New combat state
+  int _playerHp = 100;
+  int _maxPlayerHp = 100;
+  int _currentSequenceIndex = 0;
+  int _totalSequenceLength = 1;
+  List<String> _sequenceTargets = [];
+
+  bool _isDodging = false;
+  DateTime? _lastDodgeTime;
+  String? _incomingAttackWarning;
+  Timer? _combatTickTimer;
+  Timer? _gameTimer;
+  int _timeLeft = 30;
+
   StreamSubscription? _pitchSub;
   StreamSubscription? _fftSub;
+  StreamSubscription? _accelSub;
 
   @override
   void initState() {
     super.initState();
+    _playerHp = SensorManager().userHp;
+    _maxPlayerHp = SensorManager().maxHp;
+    _timeLeft = widget.monster['timeLimit'] ?? 30;
     _loadFingerprint();
+    _startAccelerometerMonitor();
   }
 
   @override
   void dispose() {
     _pitchSub?.cancel();
     _fftSub?.cancel();
+    _accelSub?.cancel();
+    _combatTickTimer?.cancel();
+    _gameTimer?.cancel();
     _analyzer.stopAnalysis();
     super.dispose();
+  }
+
+  void _startAccelerometerMonitor() {
+    _accelSub = userAccelerometerEvents.listen((event) {
+      if (!mounted) return;
+      if (event.x.abs() > 15 || event.y.abs() > 15 || event.z.abs() > 15) {
+        if (_lastDodgeTime == null || DateTime.now().difference(_lastDodgeTime!) > const Duration(seconds: 1)) {
+          _performDodge();
+        }
+      }
+    });
+  }
+
+  void _performDodge() {
+    setState(() {
+      _isDodging = true;
+      _lastDodgeTime = DateTime.now();
+      _incomingAttackWarning = null;
+    });
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) setState(() => _isDodging = false);
+    });
   }
 
   Future<void> _loadFingerprint() async {
@@ -76,29 +122,32 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
 
   void _setupBattle() {
     final rand = Random();
-    
-    // Choose battle type based on monster type
     final String monsterType = widget.monster['type'] ?? '';
     
-    if (monsterType == 'banshee') {
+    if (monsterType == 'banshee' || widget.monster['subtype'] == 'sonic') {
       _combatType = 'note';
-    } else if (monsterType == 'siren') {
-      _combatType = 'vowel';
     } else {
-      // Fallback or subtype logic
-      _combatType = widget.monster['subtype'] == 'sonic' ? 'note' : 'vowel';
+      _combatType = 'vowel';
     }
     
-    if (_combatType == 'note') {
-      final notes = (_fingerprint!['notes'] as Map).keys.toList();
-      _targetName = notes[rand.nextInt(notes.length)];
-      _targetValue = _fingerprint!['notes'][_targetName];
-    } else {
-      _combatType = 'vowel';
-      final vowels = (_fingerprint!['vowels'] as Map).keys.toList();
-      _targetName = vowels[rand.nextInt(vowels.length)];
-      _targetValue = _fingerprint!['vowels'][_targetName];
+    // Determine sequence length from monster rank
+    final String rank = widget.monster['rank'] ?? 'normal';
+    _totalSequenceLength = rank == 'epic' ? 3 : (rank == 'ancient' ? 2 : 1);
+    
+    // Pre-generate targets from calibration
+    final pool = _fingerprint![_combatType == 'note' ? 'notes' : 'vowels'] as Map;
+    final keys = pool.keys.toList();
+    if (keys.isEmpty) {
+        setState(() => _needsCalibration = true);
+        return;
     }
+
+    for (int i = 0; i < _totalSequenceLength; i++) {
+        _sequenceTargets.add(keys[rand.nextInt(keys.length)]);
+    }
+
+    _targetName = _sequenceTargets[0];
+    _targetValue = pool[_targetName];
 
     setState(() {
       _isLoading = false;
@@ -106,6 +155,63 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
     });
 
     _startListening();
+    _startCombatTimers();
+  }
+
+  void _startCombatTimers() {
+    _gameTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) return;
+      setState(() {
+        if (_timeLeft > 0) _timeLeft--;
+        else _fail("Time is up!");
+      });
+    });
+
+    _combatTickTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+      if (!mounted) return;
+      
+      // 1. Aura Damage
+      if (widget.monster['attackType'] == 'proximity_aura') {
+        _takeDamage(_isDodging ? 1 : 2);
+      }
+
+      // 2. Scheduled Attacks
+      final int interval = widget.monster['attackInterval'] ?? 3000;
+      final int tickMs = timer.tick * 500;
+      
+      if ((tickMs + 1000) % interval == 0) {
+        setState(() => _incomingAttackWarning = "MONSTER ATTACKING!");
+      }
+
+      if (tickMs % interval == 0) {
+        if (!_isDodging) {
+          _takeDamage(widget.monster['attackPower'] ?? 10);
+        } else {
+          setState(() => _incomingAttackWarning = "DODGED!");
+          Future.delayed(const Duration(seconds: 1), () {
+            if (mounted) setState(() => _incomingAttackWarning = null);
+          });
+        }
+      }
+    });
+  }
+
+  void _takeDamage(int amount) {
+    setState(() {
+      _playerHp = (_playerHp - amount).clamp(0, _maxPlayerHp);
+      if (_playerHp <= 0) {
+        _fail("You were defeated!");
+      }
+    });
+    SensorManager().takeDamage(amount);
+  }
+
+  void _fail(String msg) {
+    _analyzer.stopAnalysis();
+    _combatTickTimer?.cancel();
+    _gameTimer?.cancel();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), backgroundColor: Colors.orange));
+    widget.onLose();
   }
 
   Future<void> _startListening() async {
@@ -129,7 +235,6 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
     }
 
     final double diff = (pitch - (_targetValue as num)).abs();
-    // Tolerance: roughly 30Hz (wider for easier gameplay)
     final bool match = diff < 30.0;
     _updateMatch(match);
   }
@@ -141,7 +246,6 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
       return;
     }
 
-    // Euclidean distance between formant vectors
     final List<dynamic> fingerFormants = _targetValue;
     double distance = 0;
     for (int i = 0; i < min(liveFormants.length, fingerFormants.length); i++) {
@@ -149,7 +253,6 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
     }
     distance = sqrt(distance);
 
-    // Vowel matching is harder, higher tolerance needed (especially for O and U)
     final bool match = distance < 450.0;
     _updateMatch(match);
   }
@@ -159,14 +262,28 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
     setState(() {
       _isMatching = match;
       if (match) {
-        _matchPercentage += 0.02; // Take ~2-3 seconds to win
+        _matchPercentage += 0.025; // Slightly faster to win for sound
         if (_matchPercentage >= 1.0) {
-          _win();
+          _nextOrWin();
         }
       } else {
-        _matchPercentage = max(0, _matchPercentage - 0.005);
+        _matchPercentage = max(0, _matchPercentage - 0.008);
       }
     });
+  }
+
+  void _nextOrWin() {
+    if (_currentSequenceIndex < _totalSequenceLength - 1) {
+      setState(() {
+        _currentSequenceIndex++;
+        _matchPercentage = 0;
+        _targetName = _sequenceTargets[_currentSequenceIndex];
+        _targetValue = (_fingerprint![_combatType == 'note' ? 'notes' : 'vowels'] as Map)[_targetName];
+        _feedback = "Next target: $_targetName!";
+      });
+      return;
+    }
+    _win();
   }
 
   void _win() {
@@ -223,31 +340,79 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
       backgroundColor: Colors.black.withOpacity(0.9),
       body: Stack(
         children: [
-          // Visualizers and Background FX
           _buildAura(),
           
           SafeArea(
             child: Column(
               children: [
-                const SizedBox(height: 40),
-                const Text("SONIC COMBAT", style: TextStyle(color: Colors.cyanAccent, fontSize: 28, fontWeight: FontWeight.bold, letterSpacing: 4)),
+                // Top Header (Time and Sequence)
+                Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('$_timeLeft s', style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.orange)),
+                      Text('Seq: ${_currentSequenceIndex + 1}/$_totalSequenceLength', style: const TextStyle(color: Colors.white70)),
+                    ],
+                  ),
+                ),
+
+                // Player HP Bar
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.favorite, color: Colors.greenAccent, size: 20),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: _playerHp / _maxPlayerHp,
+                            minHeight: 10,
+                            color: Colors.greenAccent,
+                            backgroundColor: Colors.white10,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+                const Text("SONIC COMBAT", style: TextStyle(color: Colors.cyanAccent, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 4)),
+                
                 const Spacer(),
                 
                 // The Target
-                Container(
-                  padding: const EdgeInsets.all(30),
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: _isMatching ? Colors.greenAccent : Colors.white24, width: 4),
-                    boxShadow: [
-                      if (_isMatching)
-                        BoxShadow(color: Colors.greenAccent.withOpacity(0.5), blurRadius: 40, spreadRadius: 10),
-                    ],
-                  ),
-                  child: Text(
-                    _targetName,
-                    style: const TextStyle(color: Colors.white, fontSize: 70, fontWeight: FontWeight.bold),
-                  ),
+                Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(40),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: _isMatching ? Colors.greenAccent : Colors.white24, width: 4),
+                        boxShadow: [
+                          if (_isMatching)
+                            BoxShadow(color: Colors.greenAccent.withOpacity(0.3), blurRadius: 40, spreadRadius: 10),
+                        ],
+                      ),
+                      child: Text(
+                        _targetName,
+                        style: const TextStyle(color: Colors.white, fontSize: 80, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    if (_incomingAttackWarning != null)
+                      Positioned(
+                        top: -20,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                          decoration: BoxDecoration(color: Colors.red, borderRadius: BorderRadius.circular(4)),
+                          child: Text(_incomingAttackWarning!, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        ),
+                      ),
+                  ],
                 ),
                 
                 const SizedBox(height: 20),
@@ -260,12 +425,12 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
                   padding: const EdgeInsets.symmetric(horizontal: 40),
                   child: Column(
                     children: [
-                      const Text("PURIFYING RESONANCE", style: TextStyle(color: Colors.white30, fontSize: 10)),
+                      Text(_isDodging ? "DODGING!" : "PURIFYING RESONANCE", style: TextStyle(color: _isDodging ? Colors.blueAccent : Colors.white30, fontSize: 12, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
                       LinearProgressIndicator(
                         value: _matchPercentage,
                         backgroundColor: Colors.white10,
-                        color: Colors.greenAccent,
+                        color: _isMatching ? Colors.greenAccent : Colors.white24,
                         minHeight: 15,
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -273,15 +438,23 @@ class _SoundCombatOverlayState extends State<SoundCombatOverlay> {
                   ),
                 ),
                 
-                const SizedBox(height: 40),
+                const SizedBox(height: 20),
+                const Text("Shake phone to DODGE", style: TextStyle(color: Colors.white24, fontSize: 12)),
+                const SizedBox(height: 20),
+                
                 TextButton(
                   onPressed: widget.onLose,
                   child: const Text("Flee (Lose XP)", style: TextStyle(color: Colors.redAccent)),
                 ),
-                const SizedBox(height: 20),
+                const SizedBox(height: 40),
               ],
             ),
           ),
+          
+          if (_isDodging)
+            Container(
+              decoration: BoxDecoration(border: Border.all(color: Colors.blueAccent.withOpacity(0.3), width: 10)),
+            ),
         ],
       ),
     );

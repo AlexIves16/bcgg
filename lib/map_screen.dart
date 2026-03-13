@@ -6,20 +6,21 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:google_sign_in/google_sign_in.dart';
 import 'location_manager.dart';
 import 'sensor_manager.dart';
-import 'ble_manager.dart';
 import 'network_manager.dart';
 import 'gesture_combat_screen.dart';
-import 'gesture_calibration_screen.dart';
 import 'combat/sound_combat_overlay.dart';
-import 'profile/voice_calibration_screen.dart';
 import 'energy_mining_dialog.dart';
 import 'update_manager.dart';
 import 'profile/profile_drawer.dart';
-import 'admin_screen.dart';
+import 'profile/crafting_screen.dart';
 import 'package:firebase_database/firebase_database.dart';
+import 'map/widgets/animated_entity_widget.dart';
+import 'map/dialogs/physical_action_dialog.dart';
+import 'map/dialogs/base_management_dialog.dart';
+import 'map/menus/interaction_menu.dart';
+import 'map/dialogs/build_menu_dialog.dart';
 
 class MapScreen extends StatefulWidget {
   const MapScreen({super.key});
@@ -44,7 +45,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   
   StreamSubscription<List<dynamic>>? _playersSubscription;
   StreamSubscription<List<dynamic>>? _monstersSubscription;
+  StreamSubscription<List<dynamic>>? _objectsSubscription;
+  StreamSubscription<List<dynamic>>? _basesSubscription;
   StreamSubscription<Position>? _positionSubscription;
+  StreamSubscription? _ambushSubscription;
+  bool _isCombatOpen = false;
   
   int _userXp = 0;
   int _userEnergy = 0;
@@ -176,6 +181,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     debugPrint("7. Starting to listen to active Nearby Players and Monsters...");
     _startListeningToNearbyPlayers();
     _startListeningToMonsters();
+    _startListeningToObjects();
+    _startListeningToBases();
     
     debugPrint("8. Listening to SensorManager for Local XP and Energy updates...");
     SensorManager().xpStream.listen((xp) {
@@ -203,6 +210,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     });
     
     
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      _ambushSubscription = FirebaseDatabase.instanceFor(
+        app: FirebaseDatabase.instance.app,
+        databaseURL: 'https://game26-base-default-rtdb.europe-west1.firebasedatabase.app',
+      ).ref('players/${user.uid}/ambush').onValue.listen((event) {
+        if (!mounted) return;
+        if (event.snapshot.exists && !_isCombatOpen) {
+          final data = event.snapshot.value as Map;
+          final monster = Map<String, dynamic>.from(data['monster'] as Map);
+          _handleAmbush(monster);
+          event.snapshot.ref.remove();
+        }
+      });
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       debugPrint("10. Checking for OTA updates...");
       UpdateManager().checkForUpdates(context);
@@ -285,6 +308,58 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     });
   }
 
+  void _startListeningToObjects() {
+    _objectsSubscription = NetworkManager().objectsStream.listen((List<dynamic> elementsData) {
+      if (!mounted) return;
+      final now = DateTime.now();
+      final incomingIds = <String>{};
+
+      for (final element in elementsData) {
+        if (element == null) continue;
+        final id = element['id']?.toString();
+        if (id == null) continue;
+
+        if (_currentPosition != null) {
+          final dist = Geolocator.distanceBetween(
+            _currentPosition!.latitude, _currentPosition!.longitude,
+            (element['lat'] as num).toDouble(), (element['lng'] as num).toDouble()
+          );
+          if (dist > _visibilityRadius) continue;
+        }
+
+        incomingIds.add(id);
+        final double? lat = (element['lat'] as num?)?.toDouble();
+        final double? lng = (element['lng'] as num?)?.toDouble();
+        
+        if (lat == null || lng == null) continue;
+
+        final newPos = LatLng(lat, lng);
+        
+        if (!_entityDataById.containsKey(id)) {
+          _entityFromPos[id] = newPos;
+          _entityToPos[id] = newPos;
+          _entityCurrentPos[id] = newPos;
+          _entityAnimStart[id] = now;
+        } else {
+          _entityFromPos[id] = _entityCurrentPos[id] ?? newPos;
+          _entityToPos[id] = newPos;
+          _entityAnimStart[id] = now;
+        }
+        _entityDataById[id] = element;
+      }
+
+      final toRemove = _entityDataById.keys.where((id) => id.startsWith('obj_') && !incomingIds.contains(id)).toList();
+      for (final id in toRemove) {
+        _entityDataById.remove(id);
+        _entityFromPos.remove(id);
+        _entityToPos.remove(id);
+        _entityCurrentPos.remove(id);
+        _entityAnimStart.remove(id);
+      }
+      setState(() {});
+    });
+  }
+
   void _startListeningToMonsters() {
     _monstersSubscription = NetworkManager().monstersStream.listen((List<dynamic> elementsData) {
       if (!mounted) return;
@@ -345,6 +420,62 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       // Explicitly trigger a rebuild when new data arrives
       setState(() {});
     });
+  }
+
+  List<dynamic> _currentBases = [];
+
+  void _startListeningToBases() {
+    _basesSubscription = NetworkManager().basesStream.listen((List<dynamic> elementsData) {
+      if (mounted) {
+        setState(() {
+          _currentBases = elementsData;
+        });
+      }
+    });
+  }
+
+  void _handleAmbush(dynamic monster) {
+    if (!mounted) return;
+    setState(() => _isCombatOpen = true);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('WATCH OUT! A ${monster['rank']} ${monster['name']} is attacking!'),
+        backgroundColor: Colors.redAccent,
+        duration: const Duration(seconds: 4),
+      ),
+    );
+
+    final bool isSoundMonster = 
+        monster['type'] == 'banshee' || 
+        monster['type'] == 'siren' || 
+        monster['isSound'] == true;
+
+    if (isSoundMonster) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => SoundCombatOverlay(
+            monster: monster,
+            onWin: () {
+              if (mounted) setState(() => _isCombatOpen = false);
+              Navigator.pop(context);
+            },
+            onLose: () {
+              if (mounted) setState(() => _isCombatOpen = false);
+              Navigator.pop(context);
+            },
+          ),
+        ),
+      );
+    } else {
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (context) => GestureCombatScreen(monster: monster)),
+      ).then((_) {
+        if (mounted) setState(() => _isCombatOpen = false);
+      });
+    }
   }
 
   void _handleCloudTap(dynamic cloud) {
@@ -474,12 +605,176 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     );
   }
 
+  void _showInteractionMenu() {
+    // Show menu button actions - not tied to a specific element
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Color(0xFF1A1A2E),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text(
+              'MENU',
+              style: TextStyle(fontSize: 18, color: Colors.white, fontWeight: FontWeight.bold, letterSpacing: 1.2),
+            ),
+            const Divider(color: Colors.white24, height: 24),
+            ListTile(
+              leading: const Icon(Icons.person, color: Colors.white),
+              title: const Text('Profile', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                Scaffold.of(context).openDrawer();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.build, color: Colors.white),
+              title: const Text('Crafting', style: TextStyle(color: Colors.white)),
+              onTap: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (context) => CraftingScreen(isNearWorkbench: false)),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _handleObjectTap(dynamic element) {
+    // Handle null element
+    if (element == null) {
+      debugPrint('[MAP] Cannot tap on null element');
+      return;
+    }
+    
+    showInteractionMenu(
+      context: context,
+      element: element,
+      onMonsterTap: _handleMonsterTap,
+      onCloudTap: _handleCloudTap,
+      onWorkbenchTap: _showWorkbenchCrafting,
+      onLootTap: _handleLootTap,
+      onBaseTap: (base) => showBaseManagementDialog(context, base, FirebaseAuth.instance.currentUser?.uid),
+      onHarvestTap: _handleHarvest,
+    );
+  }
+
+  void _handleHarvest(dynamic element) async {
+    final String type = element['type']?.toString() ?? '';
+    final double lat = (element['lat'] as num?)?.toDouble() ?? 0.0;
+    final double lng = (element['lng'] as num?)?.toDouble() ?? 0.0;
+    
+    // Check distance before starting physical action
+    if (_currentPosition != null) {
+      final double distance = Geolocator.distanceBetween(
+        _currentPosition!.latitude, _currentPosition!.longitude,
+        lat, lng
+      );
+      if (distance > 10) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Too far to harvest! (Distance: ${distance.round()}m)'), backgroundColor: Colors.redAccent),
+        );
+        return;
+      }
+    }
+
+    final String actionDesc = type == 'tree' ? 'Swing phone to chop wood!' 
+                            : type == 'rock' || type == 'ore' ? 'Swing phone to mine stone/ore!' 
+                            : 'Swing phone to harvest!';
+    
+    final bool? success = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => PhysicalActionDialog(
+        title: 'Harvesting',
+        actionDescription: actionDesc,
+        requiredShakes: 10,
+      ),
+    );
+
+    if (success == true) {
+      NetworkManager().harvest(type, lat, lng);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Resource harvested!'), backgroundColor: Colors.green),
+        );
+      }
+    }
+  }
+
+  void _showWorkbenchCrafting(dynamic workbench) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CraftingScreen(isNearWorkbench: true),
+      ),
+    );
+  }
+
+  void _handleLootTap(dynamic loot) {
+    if (_currentPosition == null) return;
+
+    final distance = Geolocator.distanceBetween(
+      _currentPosition!.latitude, 
+      _currentPosition!.longitude, 
+      loot['lat'], 
+      loot['lng']
+    );
+
+    if (distance > 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Too far to collect! (Distance: ${distance.round()}m. Need <= 10m)'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+      return;
+    }
+
+    // List items in loot
+    final List<dynamic> items = (loot['items'] as List?) ?? [];
+    String itemsList = items.map((i) => '${i['amount']}x ${i['itemId']}').join(', ');
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Found Loot!'),
+        content: Text('This bundle contains: $itemsList'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Leave')),
+          ElevatedButton(
+            onPressed: () {
+              NetworkManager().collectLoot(loot['id'], _currentPosition!.latitude, _currentPosition!.longitude);
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Collecting loot...')),
+              );
+            },
+            child: const Text('Collect'),
+          ),
+        ],
+      ),
+    );
+  }
+
+
   @override
   void dispose() {
     _ticker?.dispose();
     _playersSubscription?.cancel();
     _monstersSubscription?.cancel();
+    _objectsSubscription?.cancel();
     _positionSubscription?.cancel();
+    _ambushSubscription?.cancel();
     NetworkManager().stop();
     LocationManager().stopTracking();
     super.dispose();
@@ -518,7 +813,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       ),
       body: _currentPosition == null
           ? const Center(child: CircularProgressIndicator())
-          : FlutterMap(
+          : Stack(
+              children: [
+                FlutterMap(
               mapController: _mapController,
               options: MapOptions(
                 initialCenter: LatLng(_currentPosition!.latitude, _currentPosition!.longitude),
@@ -549,68 +846,90 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                         ],
                       ),
                     ),
-                    ..._markers,
                   ],
                 ),
-                // Animated Entity Markers - position taken from interpolated state
+                
+                // Safe Zone Circles for Bases
+                CircleLayer(
+                  circles: _currentBases.map((base) {
+                    final lat = (base['lat'] as num?)?.toDouble() ?? 0.0;
+                    final lng = (base['lng'] as num?)?.toDouble() ?? 0.0;
+                    return CircleMarker(
+                      point: LatLng(lat, lng),
+                      color: Colors.blueAccent.withOpacity(0.1),
+                      borderStrokeWidth: 2,
+                      borderColor: Colors.blueAccent.withOpacity(0.3),
+                      useRadiusInMeter: true,
+                      radius: ((base['level'] ?? 1) * 10.0 + 40.0).toDouble(), // Level 1: 50, Level 2: 60, Level 3: 70
+                    );
+                  }).toList(),
+                ),
+
                 MarkerLayer(
+                  markers: _currentBases.map((base) {
+                    final lat = (base['lat'] as num?)?.toDouble() ?? 0.0;
+                    final lng = (base['lng'] as num?)?.toDouble() ?? 0.0;
+                    final int level = base['level'] ?? 1;
+                    String iconStr = '🏕️';
+                    if (level == 2) iconStr = '🛖';
+                    if (level == 3) iconStr = '🏠';
+
+                    return Marker(
+                      width: 60.0,
+                      height: 60.0,
+                      point: LatLng(lat, lng),
+                      child: GestureDetector(
+                        child: Column(
+                          children: [
+                            Text(iconStr, style: const TextStyle(fontSize: 32.0)),
+                            const Text('HOME', style: TextStyle(fontSize: 10, color: Colors.blueAccent, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        onTap: () {
+                          if (base['ownerId'] == user?.uid) {
+                            showBaseManagementDialog(context, base, user?.uid);
+                          } else {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(content: Text('Welcome to ${base['name']}')),
+                            );
+                          }
+                        },
+                      ),
+                    );
+                  }).toList(),
+                ),
+                MarkerLayer(markers: _markers),
+                 MarkerLayer(
                   markers: _entityDataById.entries.map((entry) {
                     final id = entry.key;
                     final element = entry.value;
                     final pos = _entityCurrentPos[id];
-                    if (pos == null) return null;
+                    if (pos == null || element == null) return null;
                     
                     final type = element['type']?.toString() ?? '';
-                    final bool isMonster = type == 'wild_bug' || type == 'banshee' || type == 'siren' || element['isSound'] == true;
-                    
-                    String emoji;
-                    String label;
-                    
-                    if (type == 'energy_cloud') {
-                      emoji = '☁️';
-                      label = 'Energy';
-                    } else if (type == 'banshee') {
-                      emoji = '👻';
-                      label = 'Banshee';
-                    } else if (type == 'siren') {
-                      emoji = '🧜‍♀️';
-                      label = 'Siren';
-                    } else {
-                      emoji = '🐞';
-                      label = 'Wild Bug';
-                    }
+                    final bool isMonster = type == 'wild-bug' || type == 'banshee' || type == 'siren' || element['isSound'] == true;
 
                     return Marker(
-                      width: 80.0,
-                      height: 85.0,
-                      point: pos, 
-                      child: GestureDetector(
-                        behavior: HitTestBehavior.opaque,
-                        onTap: () => isMonster ? _handleMonsterTap(element) : _handleCloudTap(element),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              emoji,
-                              style: const TextStyle(fontSize: 40),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: Colors.black54,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Text(
-                                label,
-                                style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ],
+                        width: 80.0,
+                        height: 85.0,
+                        point: pos, 
+                        child: AnimatedEntityWidget(
+                          elementData: element,
+                          onTap: () {
+                            if (isMonster) {
+                              _handleMonsterTap(element);
+                            } else if (type == 'energy_cloud') {
+                              _handleCloudTap(element);
+                            } else {
+                              _handleObjectTap(element);
+                            }
+                          },
                         ),
-                      ),
-                    );
+                      );
                   }).whereType<Marker>().toList(),
                 ),
+              ],
+            ),
                 // Version Display Overlay
                 Positioned(
                   bottom: 120,
@@ -629,98 +948,43 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 ),
               ],
             ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          if (_currentPosition != null) {
-            _mapController.move(
-              LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 
-              16.0
-            );
-          }
-        },
-        child: const Icon(Icons.my_location),
-      ),
-    );
-  }
-}
-
-class AnimatedEntityWidget extends StatefulWidget {
-  final dynamic elementData;
-  final VoidCallback onTapBug;
-  final VoidCallback onTapCloud;
-
-  const AnimatedEntityWidget({
-    super.key,
-    required this.elementData,
-    required this.onTapBug,
-    required this.onTapCloud,
-  });
-
-  @override
-  State<AnimatedEntityWidget> createState() => _AnimatedEntityWidgetState();
-}
-
-class _AnimatedEntityWidgetState extends State<AnimatedEntityWidget> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late Tween<double> _bounceTween;
-  late Animation<double> _bounceAnimation;
-
-  @override
-  void initState() {
-    super.initState();
-    // Simulate drifting/bobbing motion
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 2),
-    )..repeat(reverse: true);
-    
-    _bounceTween = Tween(begin: 0.0, end: 6.0);
-    _bounceAnimation = _bounceTween.animate(CurvedAnimation(parent: _controller, curve: Curves.easeInOut));
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    bool isBug = widget.elementData['type'] == 'wild_bug';
-    
-    return AnimatedBuilder(
-      animation: _bounceAnimation,
-      builder: (context, child) {
-        return Transform.translate(
-          offset: Offset(0, -_bounceAnimation.value),
-          child: child,
-        );
-      },
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: isBug ? widget.onTapBug : widget.onTapCloud,
-        child: Container(
-          color: Colors.transparent,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isBug ? Icons.bug_report : Icons.cloud, 
-                color: isBug ? Colors.red : Colors.blueAccent, 
-                size: 40.0
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                child: Text(
-                  isBug ? 'Wild Bug' : 'Energy', 
-                  style: const TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.bold)
-                ),
-              )
-            ],
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton(
+            heroTag: 'locationBtn',
+            onPressed: () {
+              if (_currentPosition != null) {
+                _mapController.move(
+                  LatLng(_currentPosition!.latitude, _currentPosition!.longitude), 
+                  16.0
+                );
+              }
+            },
+            child: const Icon(Icons.my_location),
           ),
-        ),
+          const SizedBox(height: 16),
+          FloatingActionButton(
+            heroTag: 'baseBtn',
+            backgroundColor: Colors.blueAccent,
+            child: const Icon(Icons.add_home),
+            onPressed: () {
+              if (_currentPosition == null) return;
+              
+              final user = FirebaseAuth.instance.currentUser;
+              dynamic userBase;
+              if (user != null) {
+                try {
+                   userBase = _currentBases.firstWhere((b) => b['ownerId'] == user.uid);
+                } catch(_) {}
+              }
+
+              showBuildMenuDialog(context, userBase, _currentPosition!.latitude, _currentPosition!.longitude);
+            },
+          ),
+        ],
       ),
     );
   }
 }
+

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:intl/intl.dart';
 import '../network/webrtc_manager.dart';
+import '../network/chat_cache.dart';
 
 class ChatScreen extends StatefulWidget {
   final String groupId;
@@ -31,6 +33,7 @@ class _ChatScreenState extends State<ChatScreen> {
   
   StreamSubscription? _msgSub;
   StreamSubscription? _statusSub;
+  static String? _currentlyOpenGroupId; // Track open chat globally
 
   @override
   void initState() {
@@ -39,6 +42,25 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   void _initChat() {
+    // Prevent opening duplicate chats
+    if (_currentlyOpenGroupId == widget.groupId) {
+      debugPrint('[ChatScreen] Group ${widget.groupId} is already open!');
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Chat "${widget.groupName}" is already open')),
+          );
+        }
+      });
+      return;
+    }
+    
+    _currentlyOpenGroupId = widget.groupId;
+    
+    // 1. Load cached history
+    _loadCachedMessages();
+
     if (widget.isLocalMesh && widget.lat != null && widget.lng != null) {
       WebRtcManager().joinLocalMesh(widget.lat!, widget.lng!);
     } else {
@@ -48,8 +70,13 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgSub = WebRtcManager().messageStream.listen((msg) {
       if (mounted) {
         setState(() {
-          _messages.add(msg);
-          _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+          // Deduplication using unique messageId
+          if (!_messages.any((m) => m.messageId == msg.messageId)) {
+            _messages.add(msg);
+            _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+            // Save incoming msg to cache
+            ChatCache().saveMessage(widget.groupId, msg);
+          }
         });
         _scrollToBottom();
       }
@@ -60,6 +87,16 @@ class _ChatScreenState extends State<ChatScreen> {
         setState(() => _peerStatus = status);
       }
     });
+  }
+
+  Future<void> _loadCachedMessages() async {
+    final cached = await ChatCache().loadMessages(widget.groupId);
+    if (!mounted) return;
+    setState(() {
+      _messages.addAll(cached);
+      _messages.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    });
+    _scrollToBottom();
   }
 
   void _scrollToBottom() {
@@ -79,6 +116,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _msgSub?.cancel();
     _statusSub?.cancel();
     WebRtcManager().leaveGroup();
+    _currentlyOpenGroupId = null; // Reset when chat closes
     _msgController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -88,8 +126,40 @@ class _ChatScreenState extends State<ChatScreen> {
     final text = _msgController.text.trim();
     if (text.isEmpty) return;
     
+    // Broadcast via WebRTC
     WebRtcManager().broadcastMessage(text);
     _msgController.clear();
+  }
+
+  void _clearMessages() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Clear Chat History'),
+        content: const Text('Are you sure you want to clear all messages? This will only clear your local view.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() {
+                _messages.clear();
+              });
+              // Clear from cache
+              ChatCache().clearMessages(widget.groupId);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Chat history cleared')),
+              );
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+            child: const Text('Clear'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -109,6 +179,12 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          // Clear messages button
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Clear Messages',
+            onPressed: () => _clearMessages(),
+          ),
           IconButton(
             icon: const Icon(Icons.person_add_alt_1),
             tooltip: 'Invite Friends',
@@ -151,16 +227,32 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Widget _buildMessageBubble(GroupMessage msg, bool isMe) {
+    // Format timestamp
+    final DateTime dt = DateTime.fromMillisecondsSinceEpoch(msg.timestamp);
+    final String timeString = DateFormat('HH:mm').format(dt);
+
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
         crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
         children: [
-          if (!isMe)
-            Text(
-              msg.senderName,
-              style: const TextStyle(color: Colors.cyanAccent, fontSize: 10, fontWeight: FontWeight.bold),
-            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: isMe ? MainAxisAlignment.end : MainAxisAlignment.start,
+            children: [
+              if (!isMe)
+                Text(
+                  msg.senderName,
+                  style: const TextStyle(color: Colors.cyanAccent, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              if (!isMe) const SizedBox(width: 6),
+              Text(
+                timeString,
+                style: const TextStyle(color: Colors.white54, fontSize: 8),
+              ),
+            ],
+          ),
+          const SizedBox(height: 2),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             decoration: BoxDecoration(

@@ -4,25 +4,29 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'chat_cache.dart';
 
 class GroupMessage {
   final String text;
   final String senderId;
   final String senderName;
   final int timestamp;
+  final String messageId; // Unique message ID for deduplication
 
   GroupMessage({
     required this.text,
     required this.senderId,
     required this.senderName,
     required this.timestamp,
-  });
+    String? messageId,
+  }) : messageId = messageId ?? '${senderId}_$timestamp';
 
   Map<String, dynamic> toJson() => {
     'text': text,
     'senderId': senderId,
     'senderName': senderName,
     'timestamp': timestamp,
+    'messageId': messageId,
   };
 
   factory GroupMessage.fromJson(Map<String, dynamic> json) => GroupMessage(
@@ -30,6 +34,7 @@ class GroupMessage {
     senderId: json['senderId'],
     senderName: json['senderName'],
     timestamp: json['timestamp'],
+    messageId: json['messageId'],
   );
 }
 
@@ -64,26 +69,52 @@ class WebRtcManager {
   final _invitationController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get invitationStream => _invitationController.stream;
 
+  // TURN server configuration for better P2P connectivity on mobile networks
+  // Free public TURN servers (for testing) + instructions for production
+  // Production: Register at https://www.metered.ca/tools/ for free credentials
   final Map<String, dynamic> _configuration = {
     'iceServers': [
+      // Google STUN servers (always available)
       {'urls': 'stun:stun.l.google.com:19302'},
       {'urls': 'stun:stun1.l.google.com:19302'},
       {'urls': 'stun:stun2.l.google.com:19302'},
       {'urls': 'stun:stun3.l.google.com:19302'},
       {'urls': 'stun:stun4.l.google.com:19302'},
-      // TODO: Добавьте свои TURN серверы здесь для 100% стабильности (например, от Metered.ca)
+      // TURN servers for NAT traversal (mobile networks)
+      // OpenTURN public servers (limited, for testing only)
+      {'urls': 'turn:openrelay.metered.ca:80', 'username': 'openrelayproject', 'credential': 'openrelayproject'},
+      {'urls': 'turn:openrelay.metered.ca:443', 'username': 'openrelayproject', 'credential': 'openrelayproject'},
+      {'urls': 'turn:openrelay.metered.ca:443?transport=tcp', 'username': 'openrelayproject', 'credential': 'openrelayproject'},
+      // Metered.ca free tier (register for your own credentials)
       // {
-      //   'urls': 'turn:your-turn-server.com:3478',
+      //   'urls': ['turn:ca.turn.metered.ca:443', 'turns:ca.turn.metered.ca:443'],
       //   'username': 'your-username',
       //   'credential': 'your-password'
       // },
     ],
-    'iceTransportPolicy': 'all', // Гарантирует использование и STUN и TURN
+    'iceTransportPolicy': 'all', // Uses both STUN and TURN automatically
   };
 
-  final Map<String, dynamic> _dcConstraints = {
-    'ordered': true,
-  };
+  Future<void> startListeningForInvites() async {
+    final myUid = auth.currentUser?.uid;
+    if (myUid == null) return;
+
+    _inviteSubscription?.cancel();
+    _inviteSubscription = _db.child('invitations/$myUid').onChildAdded.listen((event) {
+      final data = event.snapshot.value as Map?;
+      if (data == null) return;
+      
+      debugPrint('[WebRTC] Received INVITATION from ${event.snapshot.key}');
+      _invitationController.add({
+        'senderUid': event.snapshot.key,
+        'groupId': data['groupId'],
+        'groupName': data['groupName'],
+      });
+      
+      // Auto-clear after reporting to UI
+      event.snapshot.ref.remove();
+    });
+  }
 
   Future<void> joinGroup(String groupId) async {
     if (_currentGroupId != null) await leaveGroup();
@@ -94,9 +125,8 @@ class WebRtcManager {
 
     debugPrint('[WebRTC] Joining group: $groupId');
 
-    // 1. Register myself in the group & clear old signaling
-    await _db.child('signaling/$myUid').remove(); 
-    debugPrint('[WebRTC] Cleared stale signaling for $myUid');
+    // 1. Register myself in the group.
+    // We intentionally DO NOT clear signaling/$myUid here anymore to avoid wiping incoming handshakes!
 
     await _db.child('groups/$groupId/peers/$myUid').set({
       'joinedAt': ServerValue.timestamp,
@@ -131,7 +161,7 @@ class WebRtcManager {
 
     // 3. Listen for incoming signaling messages (offers, answers, ice)
     // We listen to the shared signaling node where others push messages for ME
-    final List<StreamSubscription> _innerSubscriptions = [];
+    final List<StreamSubscription> innerSubscriptions = [];
     _signalingSubscription = _db.child('signaling/$myUid').onChildAdded.listen((peerEvent) {
       final peerUid = peerEvent.snapshot.key;
       if (peerUid == null) return;
@@ -149,31 +179,14 @@ class WebRtcManager {
         // Clear this specific message AFTER processing
         msgEvent.snapshot.ref.remove();
       });
-      _innerSubscriptions.add(sub);
+      innerSubscriptions.add(sub);
     });
 
     // Store inner subs to cancel them later
     _peersSubscription?.onDone(() {
-      for (var s in _innerSubscriptions) {
+      for (var s in innerSubscriptions) {
         s.cancel();
       }
-    });
-
-    // 4. Listen for Invitations
-    _inviteSubscription?.cancel();
-    _inviteSubscription = _db.child('invitations/$myUid').onChildAdded.listen((event) {
-      final data = event.snapshot.value as Map?;
-      if (data == null) return;
-      
-      debugPrint('[WebRTC] Received INVITATION from ${event.snapshot.key}');
-      _invitationController.add({
-        'senderUid': event.snapshot.key,
-        'groupId': data['groupId'],
-        'groupName': data['groupName'],
-      });
-      
-      // Auto-clear after reporting to UI
-      event.snapshot.ref.remove();
     });
   }
 
@@ -194,7 +207,7 @@ class WebRtcManager {
     // 0.005 degrees is ~500m
     final gridLat = (lat / 0.005).floor();
     final gridLng = (lng / 0.005).floor();
-    final localGroupId = 'local_mesh_${gridLat}_${gridLng}';
+    final localGroupId = 'local_mesh_${gridLat}_$gridLng';
     
     debugPrint('[WebRTC] Joining Local Mesh: $localGroupId (Lat: $lat, Lng: $lng)');
     await joinGroup(localGroupId);
@@ -242,7 +255,14 @@ class WebRtcManager {
       if (message.isBinary) return;
       try {
         final json = jsonDecode(message.text);
-        _messageController.add(GroupMessage.fromJson(json));
+        final msg = GroupMessage.fromJson(json);
+        
+        // Save incoming message to cache
+        if (_currentGroupId != null) {
+          ChatCache().saveMessage(_currentGroupId!, msg);
+        }
+        
+        _messageController.add(msg);
       } catch (e) {
         debugPrint('[WebRTC] Error decoding message: $e');
       }
@@ -265,6 +285,13 @@ class WebRtcManager {
     if (data.containsKey('offer')) {
       debugPrint('[WebRTC] Received OFFER from $peerUid');
       final offerMap = Map<String, dynamic>.from(data['offer']);
+      
+      // Check connection state before setting remote description
+      if (pc.connectionState == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        debugPrint('[WebRTC] Connection already ${pc.connectionState}, ignoring duplicate offer');
+        return;
+      }
+      
       await pc.setRemoteDescription(RTCSessionDescription(offerMap['sdp'], offerMap['type']));
       
       RTCSessionDescription answer = await pc.createAnswer();
@@ -273,6 +300,13 @@ class WebRtcManager {
     } else if (data.containsKey('answer')) {
       debugPrint('[WebRTC] Received ANSWER from $peerUid');
       final answerMap = Map<String, dynamic>.from(data['answer']);
+      
+      // Check connection state before setting remote description
+      if (pc.connectionState == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
+        debugPrint('[WebRTC] Connection already ${pc.connectionState}, ignoring duplicate answer');
+        return;
+      }
+      
       await pc.setRemoteDescription(RTCSessionDescription(answerMap['sdp'], answerMap['type']));
     } else if (data.containsKey('ice')) {
       final iceMap = Map<String, dynamic>.from(data['ice']);
@@ -309,11 +343,16 @@ class WebRtcManager {
 
     final json = jsonEncode(msg.toJson());
     
-    _dataChannels.values.forEach((dc) {
+    for (var dc in _dataChannels.values) {
       if (dc.state == RTCDataChannelState.RTCDataChannelOpen) {
         dc.send(RTCDataChannelMessage(json));
       }
-    });
+    }
+
+    // Save to cache immediately (for sender)
+    if (_currentGroupId != null) {
+      ChatCache().saveMessage(_currentGroupId!, msg);
+    }
 
     // Also add to local stream so sender sees it
     _messageController.add(msg);
@@ -322,7 +361,6 @@ class WebRtcManager {
   Future<void> leaveGroup() async {
     _peersSubscription?.cancel();
     _signalingSubscription?.cancel();
-    _inviteSubscription?.cancel();
     _groupSubscription?.cancel();
     
     final myUid = auth.currentUser?.uid;
@@ -345,6 +383,11 @@ class WebRtcManager {
     _dataChannels.clear();
     _peerConnections.clear();
     _currentGroupId = null;
+    
+    // Clear signaling *after* leaving the group to clean up
+    await _db.child('signaling/$myUid').remove();
+    debugPrint('[WebRTC] Cleared stale signaling on leave for $myUid');
+    
     _updateConnectionStatus();
   }
 }

@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "9849806606",
+    "firebase_url": "https://game26-base-default-rtdb.europe-west1.firebasedatabase.app",
     "project_id": "game26-base",
     "storage_bucket": "game26-base.firebasestorage.app"
   },
@@ -13,6 +14,14 @@
         }
       },
       "oauth_client": [
+        {
+          "client_id": "9849806606-7u5uj9gvua6jo10q11skmql2t7ls5fsi.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.bcgame",
+            "certificate_hash": "29a636c1742943ce2e59b82846ff56402b9b9245"
+          }
+        },
         {
           "client_id": "9849806606-f4ipfn8tjp75gs8h39ajnqaokvf7v4ak.apps.googleusercontent.com",
           "client_type": 3

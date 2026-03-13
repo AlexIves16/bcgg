@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -9,7 +10,10 @@ import '../sensor_manager.dart';
 import 'friends_screen.dart';
 import 'edit_profile_dialog.dart';
 import 'voice_calibration_screen.dart';
+import 'inventory_screen.dart';
+import 'crafting_screen.dart';
 import '../admin_screen.dart';
+import 'admin_settings_screen.dart';
 
 class ProfileDrawer extends StatefulWidget {
   const ProfileDrawer({super.key});
@@ -21,6 +25,8 @@ class ProfileDrawer extends StatefulWidget {
 class _ProfileDrawerState extends State<ProfileDrawer> {
   int _userXp = 0;
   int _userEnergy = 0;
+  StreamSubscription? _xpSubscription;
+  StreamSubscription? _energySubscription;
 
   @override
   void initState() {
@@ -30,10 +36,10 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
     _userEnergy = SensorManager().userEnergy;
 
     // Listen to changes while drawer is open
-    SensorManager().xpStream.listen((xp) {
+    _xpSubscription = SensorManager().xpStream.listen((xp) {
       if (mounted) setState(() => _userXp = xp);
     });
-    SensorManager().energyStream.listen((energy) {
+    _energySubscription = SensorManager().energyStream.listen((energy) {
       if (mounted) setState(() => _userEnergy = energy);
     });
   }
@@ -46,6 +52,13 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
     // Sign out from both Firebase and Google
     await GoogleSignIn().signOut();
     await FirebaseAuth.instance.signOut();
+  }
+
+  @override
+  void dispose() {
+    _xpSubscription?.cancel();
+    _energySubscription?.cancel();
+    super.dispose();
   }
 
   @override
@@ -129,11 +142,28 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
               
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                child: Column(
                   children: [
-                    _buildStatColumn('Energy', '$_userEnergy', Colors.orange, Icons.flash_on),
-                    _buildStatColumn('XP', '$_userXp', Colors.blue, Icons.star),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildStatColumn('Energy', '$_userEnergy', Colors.orange, Icons.flash_on),
+                        _buildStatColumn('XP', '$_userXp', Colors.blue, Icons.star),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    if (data['stats'] != null)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.military_tech, color: Colors.redAccent, size: 20),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Kills: ${data['stats']['totalKills'] ?? 0}',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                          ),
+                        ],
+                      ),
                   ],
                 ),
               ),
@@ -158,13 +188,33 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.military_tech),
-                title: const Text('Achievements (Coming Soon)'),
-                enabled: false,
-                onTap: () {},
+                leading: const Icon(Icons.inventory_2),
+                title: const Text('Inventory'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const InventoryScreen()));
+                },
               ),
-              
-              if (isAdmin)
+              ListTile(
+                leading: const Icon(Icons.build),
+                title: const Text('Crafting & Building'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, MaterialPageRoute(builder: (context) => const CraftingScreen()));
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.military_tech, color: Colors.orange),
+                title: const Text('Achievements'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAchievementsDialog(context, data['achievements'] ?? []);
+                },
+              ),
+              if (isAdmin) ...[
                 ListTile(
                   leading: const Icon(Icons.admin_panel_settings, color: Colors.orangeAccent),
                   title: const Text('Admin Panel', style: TextStyle(color: Colors.orangeAccent)),
@@ -173,6 +223,15 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
                     Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminScreen()));
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.settings, color: Colors.indigoAccent),
+                  title: const Text('Generation Settings', style: TextStyle(color: Colors.indigoAccent)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, MaterialPageRoute(builder: (context) => const AdminSettingsScreen()));
+                  },
+                ),
+              ],
               
               const Spacer(),
               const Divider(),
@@ -205,6 +264,32 @@ class _ProfileDrawerState extends State<ProfileDrawer> {
           style: const TextStyle(fontSize: 12, color: Colors.grey),
         ),
       ],
+    );
+  }
+  void _showAchievementsDialog(BuildContext context, List<dynamic> achievements) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.military_tech, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Your Achievements'),
+          ],
+        ),
+        content: achievements.isEmpty 
+          ? const Text('Defeat monsters to earn badges!')
+          : Column(
+              mainAxisSize: MainAxisSize.min,
+              children: achievements.map((a) => ListTile(
+                leading: const Icon(Icons.workspace_premium, color: Colors.amber),
+                title: Text(a.toString()),
+              )).toList(),
+            ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Close')),
+        ],
+      ),
     );
   }
 }

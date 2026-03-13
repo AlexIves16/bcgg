@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import '../network_manager.dart';
+import 'package:bcgame/location_manager.dart';
 import 'dart:async';
 import 'package:package_info_plus/package_info_plus.dart';
 
@@ -32,6 +34,12 @@ class NetworkManager {
 
   final _monstersController = StreamController<List<dynamic>>.broadcast();
   Stream<List<dynamic>> get monstersStream => _monstersController.stream;
+
+  final _objectsController = StreamController<List<dynamic>>.broadcast();
+  Stream<List<dynamic>> get objectsStream => _objectsController.stream;
+
+  final _basesController = StreamController<List<dynamic>>.broadcast();
+  Stream<List<dynamic>> get basesStream => _basesController.stream;
 
   Future<void> connect() async {
     debugPrint('[RTDB] Connecting to Firebase Realtime Database...');
@@ -80,22 +88,39 @@ class NetworkManager {
 
       final monstersMap = data['monsters'] as Map?;
       final cloudsMap = data['clouds'] as Map?;
+      final objectsMap = data['objects'] as Map?;
       
-      final elements = [];
+      final monsterElements = [];
       if (monstersMap != null) {
-        elements.addAll(monstersMap.values.where((v) => v != null));
+        monsterElements.addAll(monstersMap.values.where((v) => v != null));
       } else if (data['monsters'] is List) {
-        elements.addAll((data['monsters'] as List).where((v) => v != null));
+        monsterElements.addAll((data['monsters'] as List).where((v) => v != null));
       }
 
       if (cloudsMap != null) {
-        elements.addAll(cloudsMap.values.where((v) => v != null));
+        monsterElements.addAll(cloudsMap.values.where((v) => v != null));
       } else if (data['clouds'] is List) {
-        elements.addAll((data['clouds'] as List).where((v) => v != null));
+        monsterElements.addAll((data['clouds'] as List).where((v) => v != null));
       }
       
-      // debugPrint('[RTDB] Received ${elements.length} map elements');
-      _monstersController.add(elements);
+      _monstersController.add(monsterElements);
+
+      final objectElements = [];
+      if (objectsMap != null) {
+        objectElements.addAll(objectsMap.values.where((v) => v != null));
+      } else if (data['objects'] is List) {
+        objectElements.addAll((data['objects'] as List).where((v) => v != null));
+      }
+      _objectsController.add(objectElements);
+
+      final baseElements = [];
+      final basesMap = data['bases'] as Map?;
+      if (basesMap != null) {
+        baseElements.addAll(basesMap.values.where((v) => v != null));
+      } else if (data['bases'] is List) {
+        baseElements.addAll((data['bases'] as List).where((v) => v != null));
+      }
+      _basesController.add(baseElements);
     });
 
     // 2. Listen to Players
@@ -256,6 +281,133 @@ class NetworkManager {
       'type': 'killMonster',
       'uid': user.uid,
       'monsterId': monsterId,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void establishBase(double latitude, double longitude) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'establishBase',
+      'uid': user.uid,
+      'email': user.email,
+      'username': _username ?? user.email?.split('@')[0] ?? 'Explorer',
+      'lat': latitude,
+      'lng': longitude,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+  void collectLoot(String lootId, double lat, double lng) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'collectLoot',
+      'uid': user.uid,
+      'lootId': lootId,
+      'lat': lat,
+      'lng': lng,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void craftItem(String recipeId, double lat, double lng) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'craftItem',
+      'uid': user.uid,
+      'recipeId': recipeId,
+      'lat': lat,
+      'lng': lng,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void equipTool(String itemId) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'equipTool',
+      'uid': user.uid,
+      'itemId': itemId,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void harvest(String targetType, double targetLat, double targetLng) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'harvest',
+      'uid': user.uid,
+      'targetType': targetType,
+      'targetLat': targetLat,
+      'targetLng': targetLng,
+      'lat': LocationManager().lastPosition?.latitude,
+      'lng': LocationManager().lastPosition?.longitude,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void upgradeBase() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'upgradeBase',
+      'uid': user.uid,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void inviteToBase(String targetIdentifier) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'inviteToBase',
+      'uid': user.uid,
+      'targetIdentifier': targetIdentifier,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void getSpawnSettings() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'getSpawnSettings',
+      'uid': user.uid,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void updateSpawnSettings(Map<String, dynamic> settings) {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'updateSpawnSettings',
+      'uid': user.uid,
+      'settings': settings,
+      'timestamp': ServerValue.timestamp,
+    });
+  }
+
+  void regenerateObjects() {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    _db.child('actions').push().set({
+      'type': 'regenerateObjects',
+      'uid': user.uid,
       'timestamp': ServerValue.timestamp,
     });
   }

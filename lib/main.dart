@@ -5,6 +5,11 @@ import 'package:google_sign_in/google_sign_in.dart';
 import 'map_screen.dart';
 import 'sensor_manager.dart';
 import 'firebase_options.dart';
+import 'dart:async';
+import 'network/webrtc_manager.dart';
+import 'profile/chat_screen.dart';
+
+final GlobalKey<NavigatorState> globalNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,6 +33,7 @@ class DigitalEtherApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: globalNavigatorKey,
       title: 'Digital Ether',
       theme: ThemeData.dark(useMaterial3: true).copyWith(
         colorScheme: ColorScheme.fromSeed(
@@ -50,11 +56,56 @@ class AuthWrapper extends StatefulWidget {
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _isLoading = false;
   bool _isInitCalled = false;
+  StreamSubscription? _globalInviteSub;
 
   @override
   void initState() {
     super.initState();
     _checkInit();
+    _listenForGlobalInvites();
+  }
+
+  void _listenForGlobalInvites() {
+    _globalInviteSub = WebRtcManager().invitationStream.listen((invite) {
+      if (!mounted) return;
+      
+      final ctx = globalNavigatorKey.currentContext;
+      if (ctx == null) return;
+      
+      showDialog(
+        context: ctx,
+        barrierDismissible: false,
+        builder: (context) => AlertDialog(
+          backgroundColor: const Color(0xFF1a1a2e),
+          title: const Text('P2P Chat Invite', style: TextStyle(color: Colors.white)),
+          content: Text('Friend ${invite['senderUid']} invites you to join "${invite['groupName']}"', style: const TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Decline', style: TextStyle(color: Colors.redAccent)),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(context);
+                Navigator.push(
+                  ctx,
+                  MaterialPageRoute(
+                    builder: (context) => ChatScreen(groupId: invite['groupId'], groupName: invite['groupName']),
+                  ),
+                );
+              },
+              child: const Text('Join'),
+            ),
+          ],
+        ),
+      );
+    });
+  }
+  
+  @override
+  void dispose() {
+    _globalInviteSub?.cancel();
+    super.dispose();
   }
 
   void _checkInit() {
@@ -62,6 +113,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
       if (user != null && !_isInitCalled) {
         _isInitCalled = true;
         SensorManager().init();
+        WebRtcManager().startListeningForInvites();
       }
     });
   }

@@ -17,55 +17,18 @@ class FriendsScreen extends StatefulWidget {
 }
 
 class _FriendsScreenState extends State<FriendsScreen> {
+  String _currentOpenChatId = ''; // Track currently open chat to prevent duplicates
   final User? currentUser = FirebaseAuth.instance.currentUser;
-  StreamSubscription? _inviteSub;
 
   @override
   void initState() {
     super.initState();
-    _listenForInvites();
   }
 
-  void _listenForInvites() {
-    _inviteSub = WebRtcManager().invitationStream.listen((invite) {
-      if (!mounted) return;
-      _showInviteDialog(invite['senderUid'], invite['groupId'], invite['groupName']);
-    });
-  }
 
-  void _showInviteDialog(String senderUid, String groupId, String groupName) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF1a1a2e),
-        title: const Text('P2P Chat Invite', style: TextStyle(color: Colors.white)),
-        content: Text('Friend $senderUid invites you to join "$groupName"', style: const TextStyle(color: Colors.white70)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Decline', style: TextStyle(color: Colors.redAccent)),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ChatScreen(groupId: groupId, groupName: groupName),
-                ),
-              );
-            },
-            child: const Text('Join'),
-          ),
-        ],
-      ),
-    );
-  }
 
   @override
   void dispose() {
-    _inviteSub?.cancel();
     super.dispose();
   }
 
@@ -86,8 +49,17 @@ class _FriendsScreenState extends State<FriendsScreen> {
             icon: const Icon(Icons.radar),
             tooltip: 'Join Nearby Mesh',
             onPressed: () async {
+              // Prevent opening duplicate chats
+              if (_currentOpenChatId == 'local_mesh') {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Local Mesh chat is already open')),
+                );
+                return;
+              }
+              
               final pos = await LocationManager().getCurrentPosition();
               if (!mounted) return;
+              _currentOpenChatId = 'local_mesh';
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -99,19 +71,32 @@ class _FriendsScreenState extends State<FriendsScreen> {
                     lng: pos.longitude,
                   ),
                 ),
-              );
+              ).then((_) {
+                _currentOpenChatId = ''; // Reset when chat closes
+              });
             },
           ),
           IconButton(
             icon: const Icon(Icons.groups_outlined),
             tooltip: 'Join Global Chat',
             onPressed: () {
+              // Prevent opening duplicate chats
+              if (_currentOpenChatId == 'global_mesh') {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Global Mesh chat is already open')),
+                );
+                return;
+              }
+              
+              _currentOpenChatId = 'global_mesh';
               Navigator.push(
                 context,
                 MaterialPageRoute(
                   builder: (context) => const ChatScreen(groupId: 'global_mesh', groupName: 'Global Mesh Chat'),
                 ),
-              );
+              ).then((_) {
+                _currentOpenChatId = ''; // Reset when chat closes
+              });
             },
           ),
         ],
@@ -359,8 +344,8 @@ class _FriendListTileState extends State<FriendListTile> {
         children: [
           if (_isOnline)
             IconButton(
-              icon: const Icon(Icons.add_comment_outlined, color: Colors.greenAccent, size: 20),
-              tooltip: 'Invite to P2P',
+              icon: const Icon(Icons.add_comment_outlined, color: Colors.greenAccent, size: 24),
+              tooltip: 'Private P2P Chat',
               onPressed: () {
                 final myUid = FirebaseAuth.instance.currentUser?.uid;
                 if (myUid == null) return;
@@ -381,31 +366,11 @@ class _FriendListTileState extends State<FriendListTile> {
                 );
               },
             ),
-          IconButton(
-            icon: const Icon(Icons.chat_bubble_outline, color: Colors.cyanAccent, size: 20),
-            onPressed: () {
-              final myUid = FirebaseAuth.instance.currentUser?.uid;
-              if (myUid == null) return;
-              // Deterministic Group ID for 1-to-1
-              final uids = [myUid, widget.friendUid]..sort();
-              final groupId = 'p2p_${uids[0]}_${uids[1]}';
-              
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => ChatScreen(
-                    groupId: groupId,
-                    groupName: 'Chat with ${widget.friendEmail.split('@')[0]}',
-                  ),
-                ),
-              );
-            },
-          ),
-          Icon(
-            _isOnline ? Icons.wifi : Icons.wifi_off,
-            color: _isOnline ? Colors.green : Colors.grey,
-            size: 16,
-          ),
+          if (!_isOnline)
+            const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 12),
+              child: Icon(Icons.wifi_off, color: Colors.grey, size: 20),
+            ),
         ],
       );
     }

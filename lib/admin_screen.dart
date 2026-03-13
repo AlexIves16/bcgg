@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:firebase_database/firebase_database.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'network_manager.dart';
 import 'combat/sound_combat_overlay.dart';
 import 'gesture_combat_screen.dart';
+import 'sensor_manager.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
@@ -106,14 +106,27 @@ class _AdminScreenState extends State<AdminScreen> {
     await _adminRef.update({key: value});
   }
 
-  void _triggerMockBattle(String type) {
+  void _triggerMockBattle(String type, {String rank = 'normal'}) {
+    double hpMult = rank == 'epic' ? 5 : (rank == 'ancient' ? 3 : (rank == 'strong' ? 1.5 : 1));
+    int seqLength = rank == 'epic' ? 3 : (rank == 'ancient' ? 2 : 1);
+    
+    final shapes = ['circle', 'square', 'triangle'];
+    final sequence = List.generate(seqLength, (_) => shapes[DateTime.now().millisecond % 3]);
+
     final mockMonster = {
-      'id': 'mock_${type}_${DateTime.now().millisecondsSinceEpoch}',
+      'id': 'mock_${type}_${rank}_${DateTime.now().millisecondsSinceEpoch}',
       'type': type,
-      'hp': 100,
+      'rank': rank,
+      'hp': (100 * hpMult).toInt(),
       'energyCost': 0,
-      'name': 'Training ${type.toUpperCase()}',
-      'isSound': type != 'wild_bug',
+      'name': 'TEST ${rank.toUpperCase()} ${type.toUpperCase()}',
+      'isSound': type == 'banshee' || type == 'siren' || type == 'wraith' || type == 'elemental',
+      'combatSequence': sequence,
+      'requiredShape': sequence[0],
+      'attackType': type == 'golem' ? 'burst' : (type == 'wraith' ? 'proximity_aura' : 'projectile'),
+      'attackPower': (10 * (hpMult > 1 ? hpMult : 1)).toInt(),
+      'attackInterval': type == 'golem' ? 5000 : 3000,
+      'timeLimit': rank == 'normal' ? 15 : (rank == 'strong' ? 20 : 30),
     };
 
     if (type == 'banshee' || type == 'siren') {
@@ -140,6 +153,16 @@ class _AdminScreenState extends State<AdminScreen> {
         ),
       );
     }
+  }
+
+  void _testHeal() {
+    SensorManager().heal(100);
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('HP Restored to 100%')));
+  }
+
+  void _testAddXP(int amount) {
+    SensorManager().addXP(amount);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added $amount XP')));
   }
 
   Future<void> _triggerReset() async {
@@ -269,45 +292,42 @@ class _AdminScreenState extends State<AdminScreen> {
               const SizedBox(height: 16),
 
               _buildCategoryTile(
-                title: 'Combat Emulation (DEBUG)',
+                title: 'Combat Emulation (NEW RANK TESTS)',
                 icon: Icons.bug_report,
                 color: Colors.redAccent,
                 children: [
-                  const Text(
-                    'Instantly start a mock battle for testing. No energy cost, no XP gain.',
-                    style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic),
+                  const Text('Test specific mob types and ranks. No XP/Achievements recorded.'),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ElevatedButton(onPressed: () => _triggerMockBattle('golem', rank: 'normal'), child: const Text('Golem (N)')),
+                      ElevatedButton(onPressed: () => _triggerMockBattle('golem', rank: 'strong'), child: const Text('Golem (S)')),
+                      ElevatedButton(onPressed: () => _triggerMockBattle('golem', rank: 'ancient'), child: const Text('Golem (A)')),
+                      ElevatedButton(onPressed: () => _triggerMockBattle('golem', rank: 'epic'), child: const Text('Golem (E)')),
+                    ],
                   ),
-                  const SizedBox(height: 16),
+                  const Divider(),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ElevatedButton(onPressed: () => _triggerMockBattle('wraith', rank: 'normal'), child: const Text('Wraith (N)')),
+                      ElevatedButton(onPressed: () => _triggerMockBattle('wraith', rank: 'epic'), child: const Text('Wraith (Aura)')),
+                    ],
+                  ),
+                   const Divider(),
                   Row(
                     children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _triggerMockBattle('banshee'),
-                          icon: const Text('👻', style: TextStyle(fontSize: 18)),
-                          label: const Text('Test Banshee'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.cyan[700], foregroundColor: Colors.white),
-                        ),
-                      ),
+                      Expanded(child: ElevatedButton(onPressed: _testHeal, child: const Text('Full Heal'))),
                       const SizedBox(width: 8),
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _triggerMockBattle('siren'),
-                          icon: const Text('🧜‍♀️', style: TextStyle(fontSize: 18)),
-                          label: const Text('Test Siren'),
-                          style: ElevatedButton.styleFrom(backgroundColor: Colors.pink[700], foregroundColor: Colors.white),
-                        ),
-                      ),
+                      Expanded(child: ElevatedButton(onPressed: () => _testAddXP(100), child: const Text('+100 XP'))),
                     ],
                   ),
                   const SizedBox(height: 8),
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () => _triggerMockBattle('wild_bug'),
-                      icon: const Text('🐞', style: TextStyle(fontSize: 18)),
-                      label: const Text('Test Basic Bug (Gestures)'),
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.orange[800], foregroundColor: Colors.white),
-                    ),
+                  ElevatedButton(
+                    onPressed: () => _triggerMockBattle('wild-bug'), 
+                    style: ElevatedButton.styleFrom(minimumSize: const Size(double.infinity, 40)),
+                    child: const Text('Test Basic Bug (Gestures)')
                   ),
                 ],
               ),
@@ -340,7 +360,7 @@ class _AdminScreenState extends State<AdminScreen> {
       title: Text(title),
       value: value,
       onChanged: onChanged,
-      activeColor: Colors.purpleAccent,
+      activeThumbColor: Colors.purpleAccent,
     );
   }
 
